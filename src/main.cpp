@@ -22,6 +22,8 @@
 #include "Kernel/Services/KryonCloud/KryonCloudUI.h"
 #include "Kernel/Services/OTA/OTAManager.h"
 #include "Hal/Boards/Board.h"
+#include "Hal/Display/Display.h"
+#include "UI/UiLayout.h"
 
 // Define states
 #define STATE_LAUNCHER 0
@@ -45,6 +47,10 @@
 
 int currentState = STATE_LAUNCHER;
 
+// Shorthand for the current screen metrics. UiLayout::current() lazily derives from Display, so
+// this is safe even before UiLayout::begin() runs. See Documentation/Display_Touch_Architecture.md.
+static inline const UiMetrics& M() { return UiLayout::current(); }
+
 void setup() {
     Serial.begin(115200);
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT == 1)
@@ -66,20 +72,23 @@ void setup() {
     }
 #endif
 
-    // Init TFT & Touch Driver
-    tft.init();
-    tft.setRotation(0);
+    // Init Display & Touch Driver. Display::begin() applies the board profile's rotation so the
+    // logical canvas matches KRYONOS_DISPLAY_*. See Documentation/Display_Touch_Architecture.md.
+    Display::begin();
+    UiLayout::begin();
     TouchDriver::init(&tft);
+    Serial.printf("[TOUCH] Driver: %s | canvas %dx%d\n", TouchDriver::driverName(),
+                  Display::width(), Display::height());
 
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("Booting KryonOS...", 120, 160, 2);
+    tft.drawString("Booting KryonOS...", Display::centerX(), Display::centerY(), M().fontBody);
 
     // Initialize File Systems (LittleFS & SD)
     if (!FileSystem::init()) {
         Serial.println("File System Warning: One or more FS failed to mount.");
-        tft.drawString("FS Mount Warning!", 120, 180, 2);
+        tft.drawString("FS Mount Warning!", Display::centerX(), Display::centerY() + 20, M().fontBody);
         delay(1000);
     }
     
@@ -89,11 +98,11 @@ void setup() {
     // Initialize Web Manager (Only if not disabled)
     if (!FileSystem::exists("/local/nowifi.txt")) {
         tft.fillScreen(TFT_BLACK);
-        tft.drawString("Connecting WiFi...", 120, 160, 2);
+        tft.drawString("Connecting WiFi...", Display::centerX(), Display::centerY(), M().fontBody);
         Serial.println("DEBUG: Starting WebManager...");
         if (WebManager::init()) {
-            tft.drawString("WiFi Connected!", 120, 140, 2);
-            tft.drawString(WebManager::getIPAddress(), 120, 180, 2);
+            tft.drawString("WiFi Connected!", Display::centerX(), Display::centerY() - 20, M().fontBody);
+            tft.drawString(WebManager::getIPAddress(), Display::centerX(), Display::centerY() + 20, M().fontBody);
             delay(2000);
         }
         Serial.println("DEBUG: WebManager initialized.");
@@ -124,23 +133,32 @@ void setup() {
     // Initial App Scan (with loading bar outline)
     Serial.println("DEBUG: Scanning Local Apps...");
     tft.fillScreen(TFT_BLACK);
-    tft.drawString("Loading Apps...", 120, 160, 2);
-    tft.drawRect(18, 198, 204, 14, TFT_WHITE); // Loading bar outline
+    tft.drawString("Loading Apps...", Display::centerX(), Display::centerY(), M().fontBody);
+    // Loading bar outline: 18px side gutters, 38px below centre (18,198,204,14 at 240x320).
+    tft.drawRect(18, Display::centerY() + 38, Display::width() - 36, 14, TFT_WHITE);
     LauncherUI::scanLocalApps();
     LauncherUI::needsRescan = false;
     Serial.println("DEBUG: Local Apps Scanned.");
 
-    // Attempt to read touch calibration
+    // Attempt to read touch calibration. A driver that reports absolute coordinates (any
+    // capacitive panel, or a board with no touch at all) has nothing to calibrate, so it goes
+    // straight to the launcher and /touch_cal_p.bin is simply not consulted.
     Serial.println("DEBUG: Reading CalData...");
-    uint16_t calData[5];
-    if (FileSystem::readCalData(calData)) {
-        Serial.printf("Calibration data found: [%u, %u, %u, %u, %u]\n",
-                      calData[0], calData[1], calData[2], calData[3], calData[4]);
-        TouchDriver::setTouch(calData);
+    if (!TouchDriver::needsCalibration()) {
+        Serial.printf("Touch driver '%s' does not need calibration. Skipping calibrator.\n",
+                      TouchDriver::driverName());
         currentState = STATE_LAUNCHER;
     } else {
-        Serial.println("No valid calibration data. Entering touch calibrator.");
-        currentState = STATE_CALIBRATOR;
+        uint16_t calData[5];
+        if (FileSystem::readCalData(calData)) {
+            Serial.printf("Calibration data found: [%u, %u, %u, %u, %u]\n",
+                          calData[0], calData[1], calData[2], calData[3], calData[4]);
+            TouchDriver::setTouch(calData);
+            currentState = STATE_LAUNCHER;
+        } else {
+            Serial.println("No valid calibration data. Entering touch calibrator.");
+            currentState = STATE_CALIBRATOR;
+        }
     }
     
     // Check for updates & send zero-auth telemetry ping on boot
@@ -227,8 +245,8 @@ void loop() {
         } else {
             // If held down for 300ms, start fast repeat
             if (millis() - lastTouchTime > 300) {
-                // Only fast repeat for footer buttons (UP/DN are typically at y >= 280)
-                if (y >= 280) {
+                // Only fast repeat inside the footer strip (UP/DN/SEL buttons).
+                if (M().inFooter(y)) {
                     processNow = true;
                     lastTouchTime = millis() - 250; // repeat every 50ms
                 }
@@ -267,8 +285,10 @@ void loop() {
             } else if (currentState == STATE_KRYON_CLOUD) {
                 KryonCloudUI::handleTouch(x, y);
             } else if (currentState == STATE_RUN_APP) {
-                // Check if user touched the top-right "X" button
-                if (x >= 200 && y <= 40) {
+                // Check if user touched the top-right "X" button. The 10px of extra vertical
+                // tolerance matches the historical `y <= 40` test at 240x320.
+                const UiRect& ex = M().appExitButton;
+                if (x >= ex.x && y <= ex.h + 10) {
                     currentState = STATE_LAUNCHER; // Exit app
                 }
             }
@@ -294,10 +314,46 @@ void loop() {
         } else if (cmd.equalsIgnoreCase("info")) {
             Serial.printf("[INFO] Free Heap: %u bytes, Free PSRAM: %u bytes / %u total\n",
                           ESP.getFreeHeap(), ESP.getFreePsram(), ESP.getPsramSize());
+        } else if (cmd.equalsIgnoreCase("layout")) {
+            // Dump the live layout so it can be diffed against tools/preview/layout_model.py.
+            const UiMetrics& m = M();
+            Serial.printf("[LAYOUT] board=%s canvas=%dx%d rotation=%d landscape=%d\n",
+                          Display::boardId(), Display::width(), Display::height(),
+                          Display::rotation(), m.landscape ? 1 : 0);
+            Serial.printf("[LAYOUT] macros=%dx%d rot=%d panel=%dx%d\n",
+                          KRYONOS_DISPLAY_WIDTH, KRYONOS_DISPLAY_HEIGHT, KRYONOS_DISPLAY_ROTATION,
+                          tft.width(), tft.height());
+            Serial.printf("[LAYOUT] inset=%u frame=%d,%d,%d,%d header=%d,%d,%d,%d headerTextY=%d\n",
+                          m.inset, m.frame.x, m.frame.y, m.frame.w, m.frame.h,
+                          m.header.x, m.header.y, m.header.w, m.header.h, m.headerTextY);
+            Serial.printf("[LAYOUT] list=%d,%d,%d,%d footer=%d,%d,%d,%d footerTextY=%d\n",
+                          m.list.x, m.list.y, m.list.w, m.list.h,
+                          m.footer.x, m.footer.y, m.footer.w, m.footer.h, m.footerTextY);
+            Serial.printf("[LAYOUT] rowH=%d rowFillH=%d itemsPerPage=%d scrollX=%d,%d thumbMin=%d\n",
+                          m.rowH, m.rowFillH, m.itemsPerPage, m.scrollX, m.scrollW, m.scrollThumbMin);
+            Serial.printf("[LAYOUT] center=%d,%d appExit=%d,%d,%d,%d fonts=%d/%d/%d\n",
+                          m.centerX, m.centerY, m.appExitButton.x, m.appExitButton.y,
+                          m.appExitButton.w, m.appExitButton.h,
+                          m.fontSmall, m.fontBody, m.fontHeader);
+            Serial.printf("[LAYOUT] card=%d,%d %dx%d r=%d restingY=%d hiddenY=%d shadow=%dx%d\n",
+                          m.cardX, m.restingY, m.cardW, m.cardH, m.cardR, m.restingY, m.hiddenY,
+                          m.shadowW, m.shadowH);
+            Serial.printf("[LAYOUT] kb textBox=%d,%d,%d,%d buttonRow=%d,%d,%d,%d buttonW=%d "
+                          "gridTop=%d keys=%dx%d %dx%d\n",
+                          m.kbTextBox.x, m.kbTextBox.y, m.kbTextBox.w, m.kbTextBox.h,
+                          m.kbButtonRow.x, m.kbButtonRow.y, m.kbButtonRow.w, m.kbButtonRow.h,
+                          m.kbButtonW, m.kbGridTop, m.kbKeyW, m.kbKeyH, m.kbCols, m.kbRows);
+            const char* fname[3] = { "UP", "SEL", "DN" };
+            for (int i = UI_FOOTER_UP; i <= UI_FOOTER_DN; i++) {
+                UiRect r = m.footerButton(i);
+                Serial.printf("[LAYOUT] footer[%s]=%d,%d,%d,%d centerX=%d\n",
+                              fname[i], r.x, r.y, r.w, r.h, m.footerButtonCenterX(i));
+            }
         } else if (cmd.equalsIgnoreCase("help")) {
             Serial.println("--- KryonOS Serial Commands ---");
             Serial.println("  cal / calibrate : Launch fresh touch calibration");
             Serial.println("  info            : View memory & system diagnostics");
+            Serial.println("  layout          : Dump live screen metrics (see tools/preview/)");
             Serial.println("  reboot          : Reboot the ESP32");
         }
     }
