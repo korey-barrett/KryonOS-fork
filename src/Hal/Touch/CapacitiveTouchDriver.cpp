@@ -33,8 +33,8 @@ static bool toCanvas(uint16_t nativeX, uint16_t nativeY, uint16_t* x, uint16_t* 
 
 // --- Shared lifecycle --------------------------------------------------------------------------
 
-void I2cTouchDriver::begin(TFT_eSPI* tft) {
-    (void)tft;
+void I2cTouchDriver::begin(KryonDisplay* display) {
+    (void)display; // capacitive panels report absolute pixels; nothing to draw or delegate
 
 #if defined(KRYONOS_TOUCH_I2C_SDA) && defined(KRYONOS_TOUCH_I2C_SCL)
 #ifdef KRYONOS_TOUCH_I2C_ADDR

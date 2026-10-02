@@ -1,6 +1,8 @@
 #if defined(TARGET_T_HMI)
 
 #include "../Board.h"
+#include "Hal/Display/RamFramebufferDisplay.h"
+#include "Hal/Display/TftEspiDisplay.h"
 #include "BoardConfig.h"
 #include <SPI.h>
 #include <SD_MMC.h>
@@ -10,7 +12,15 @@
 // DISPLAY & TOUCH INSTANCE
 // ============================================================
 
-TFT_eSPI tft = TFT_eSPI();
+// The display backend for this board: the concrete object lives here, and `tft` is the
+// KryonDisplay reference the rest of the OS draws through. Which backend is chosen comes
+// from KRYONOS_DISPLAY_BACKEND (src/Hal/Display/DisplayConfig.h), defaulting to TFT_eSPI.
+#if KRYONOS_DISPLAY_BACKEND == KRYONOS_BACKEND_RAM
+static RamFramebufferDisplay s_display(KRYONOS_DISPLAY_WIDTH, KRYONOS_DISPLAY_HEIGHT);
+#else
+static TftEspiDisplay s_display;
+#endif
+KryonDisplay& tft = s_display;
 
 // ============================================================
 // BOARD CAPABILITIES

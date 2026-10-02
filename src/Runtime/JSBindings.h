@@ -5,18 +5,19 @@
 #include "duktape.h"
 #include <TFT_eSPI.h>
 
+#include "Hal/Display/KryonDisplay.h"
 class JSBindings {
 public:
-    static void init(duk_context *ctx, TFT_eSPI *tft);
+    static void init(duk_context *ctx, KryonDisplay *tft);
     static void cleanup(duk_context *ctx);
     static void setSandboxRoot(const String& root);
     static String getSandboxRoot();
-    static TFT_eSPI* getTFT() { return tftInstance; }
+    static KryonDisplay* getTFT() { return tftInstance; }
     static void revokeSessionPermission(const String& pkg);
     static void clearAllSessionPermissions();
 
 private:
-    static TFT_eSPI *tftInstance;
+    static KryonDisplay *tftInstance;
     static TFT_eSprite *tftSprite;
 
     // Double Buffering

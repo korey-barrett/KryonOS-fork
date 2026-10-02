@@ -132,9 +132,34 @@ panel/touch combinations but are deliberately not in `extra_configs`, so they ar
 
 ### 2.3 The global `tft` symbol
 
-`src/Hal/Boards/Board.h` declares `extern TFT_eSPI tft;`. Exactly one board implementation defines it.
-There is one default implementation **per chip type**, each behind a positive guard set by its
-environment in `platformio.ini`:
+`src/Hal/Boards/Board.h` declares `extern KryonDisplay& tft;` — a reference to the abstract surface in
+`src/Hal/Display/KryonDisplay.h`, not to TFT_eSPI. Every UI file holds a `KryonDisplay*`, so the panel
+driver behind it is a build-flag choice. The board file owns the concrete object and binds the
+reference:
+
+```cpp
+#if KRYONOS_DISPLAY_BACKEND == KRYONOS_BACKEND_RAM
+static RamFramebufferDisplay s_display(KRYONOS_DISPLAY_WIDTH, KRYONOS_DISPLAY_HEIGHT);
+#else
+static TftEspiDisplay s_display;
+#endif
+KryonDisplay& tft = s_display;
+```
+
+`KRYONOS_DISPLAY_BACKEND` (defined in `DisplayConfig.h`, default `KRYONOS_BACKEND_TFT_ESPI`) must be
+compile-time because it decides the static type of the object — unlike `KRYONOS_TOUCH_DRIVER`, which
+is a string compared at runtime. `TftEspiDisplay` derives from both `TFT_eSPI` and `KryonDisplay`, so
+one object is simultaneously the driver and the interface; `KryonDisplay::nativeTft()` returns it for
+the code that genuinely needs TFT_eSPI (sprite allocation, `Xpt2046TftDriver`), and returns `nullptr`
+on a backend that has none.
+
+Two things still reach for TFT_eSPI and are deliberately left that way for now: every UI file keeps
+`#include <TFT_eSPI.h>` for the `TFT_*` colour and `*_DATUM` macros, and notification/JS sprites are
+still `TFT_eSprite`, which needs a `TFT_eSPI*` — hence `nativeTft()` and the graceful no-op when it is
+null. Decoupling the macros and adding a backend-neutral `KryonSprite` are follow-ups.
+
+Exactly one board implementation defines the object. There is one default implementation **per chip
+type**, each behind a positive guard set by its environment in `platformio.ini`:
 
 | Environment | Guard | Implementation |
 | :--- | :--- | :--- |
@@ -153,8 +178,7 @@ environment in `platformio.ini`:
 them — but **nothing calls them today**. The live boot path is in `src/main.cpp`:
 
 ```cpp
-tft.init();
-tft.setRotation(0);
+Display::begin();        // tft.init() + setRotation(KRYONOS_DISPLAY_ROTATION) + metric check
 TouchDriver::init(&tft);
 ```
 
@@ -491,7 +515,15 @@ pixel-identical at 240×320 at each step:
   never consults `/touch_cal_p.bin`. The three capacitive drivers are implemented at register level
   but have no panel to be tested against.
 - **Phase 5** — a `KryonDisplay` backend seam so panels TFT_eSPI cannot drive (RGB parallel, OLED,
-  e-paper) can be added without rewriting the UI.
+  e-paper) can be added without rewriting the UI. **Done** for the interface and the two backends:
+  `KryonDisplay.h` is the abstract surface, `TftEspiDisplay` the default adapter (it derives from both
+  `TFT_eSPI` and `KryonDisplay`, so the concrete object keeps the whole TFT_eSPI API), and
+  `RamFramebufferDisplay` a reference backend sharing no code with TFT_eSPI. The global `tft` is now a
+  `KryonDisplay&` and every call site holds a `KryonDisplay*`; both `esp32s3-default` and
+  `esp32-default` build, and the S3 target also builds with
+  `-D KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RAM`. Two caveats: the RAM rasterizer compiles and binds
+  but has never been run, and it embeds no font, so it draws geometry only. `KryonSprite` (a
+  backend-neutral sprite) and removing the remaining `TFT_*` macro dependency are outstanding.
 - **Phase 6** — new-board recipe hardening, CI build matrix, and a gate that fails on reintroduced
   hard-coded dimensions. The CI/OTA registration half is done: `OTAManager::getBoardTargetName()` now
   returns `KRYONOS_BOARD_ID` directly instead of a `TARGET_*` ladder, `release.yml` derives the

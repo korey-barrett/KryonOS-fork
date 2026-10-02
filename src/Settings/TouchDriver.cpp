@@ -9,7 +9,7 @@
 // Hal/Touch/TouchConfig.h, which this header pulls in, so anything that used to reach T_CS_PIN
 // through here still can.
 
-void TouchDriver::init(TFT_eSPI *tft) {
+void TouchDriver::init(KryonDisplay *tft) {
     touchDriver().begin(tft);
 }
 

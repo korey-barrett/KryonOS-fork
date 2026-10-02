@@ -31,7 +31,7 @@ public:
 
     const char* name() const override { return name_; }
 
-    void begin(TFT_eSPI* tft) override;
+    void begin(KryonDisplay* display) override;
     bool getTouchRaw(uint16_t* x, uint16_t* y) override;
     bool getTouch(uint16_t* x, uint16_t* y, uint16_t threshold) override;
     void setCalibration(const uint16_t* parameters) override { (void)parameters; }

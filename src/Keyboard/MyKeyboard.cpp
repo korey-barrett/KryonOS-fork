@@ -2,7 +2,7 @@
 #include "../Settings/TouchDriver.h"
 #include "../UI/UiLayout.h"
 
-TFT_eSPI *MyKeyboard::tftInstance = nullptr;
+KryonDisplay *MyKeyboard::tftInstance = nullptr;
 
 // Screen metrics. At 240x320 the keyboard metrics reproduce the historical literals exactly:
 // text box (5,30,230,30), 5 buttons 48px wide at y70..100, 12x4 key grid from y110, keys 20x52.
@@ -19,7 +19,7 @@ char qwerty_keyset[kh][kw][2] = {
     {{'\\', '|'}, {'z', 'Z'}, {'x', 'X'}, {'c', 'C'}, {'v', 'V'}, {'b', 'B'}, {'n', 'N'}, {'m', 'M'}, {',', '<'}, {'.', '>'}, {'/', '?'}, {' ', ' '}}
 };
 
-void MyKeyboard::init(TFT_eSPI *tft) {
+void MyKeyboard::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 

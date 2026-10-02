@@ -3,13 +3,14 @@
 
 #include <TFT_eSPI.h>
 
+#include "Hal/Display/KryonDisplay.h"
 class TouchCalibrator {
 public:
-    static void init(TFT_eSPI *tft);
+    static void init(KryonDisplay *tft);
     static void runCalibration();
 
 private:
-    static TFT_eSPI *tftInstance;
+    static KryonDisplay *tftInstance;
 };
 
 #endif // TOUCH_CALIBRATOR_H

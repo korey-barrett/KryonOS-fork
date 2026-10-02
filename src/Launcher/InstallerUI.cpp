@@ -11,7 +11,7 @@ extern int currentState;
 // Current screen metrics. See Documentation/Display_Touch_Architecture.md.
 static inline const UiMetrics& M() { return UiLayout::current(); }
 
-TFT_eSPI *InstallerUI::tftInstance = nullptr;
+KryonDisplay *InstallerUI::tftInstance = nullptr;
 FileEntry InstallerUI::files[200];
 int InstallerUI::fileCount = 0;
 String InstallerUI::currentPath = "/";
@@ -50,7 +50,7 @@ static void saveAppPermissions(const String& pkg, const std::vector<String>& per
 }
 
 // Static pointer for progress callback
-static TFT_eSPI* progressTft = nullptr;
+static KryonDisplay* progressTft = nullptr;
 
 static bool isVersionGreater(const String& newVer, const String& oldVer) {
     int newParts[3] = {0, 0, 0};
@@ -84,7 +84,7 @@ static bool isVersionGreater(const String& newVer, const String& oldVer) {
     return false;
 }
 
-void InstallerUI::init(TFT_eSPI *tft) {
+void InstallerUI::init(KryonDisplay *tft) {
     tftInstance = tft;
     progressTft = tft;
 }

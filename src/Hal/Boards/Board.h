@@ -3,12 +3,16 @@
 
 #include <Arduino.h>
 #include <FS.h>
+// Still included for the TFT_* colour and *_DATUM macros, which the UI uses throughout. Making
+// those backend-neutral is tracked separately; KryonDisplay.h itself needs no TFT_eSPI.
 #include <TFT_eSPI.h>
 
 #include "Hal/Display/DisplayConfig.h"
+#include "Hal/Display/KryonDisplay.h"
 
-// Global TFT_eSPI driver instance
-extern TFT_eSPI tft;
+// The one display instance the whole OS draws through. The concrete backend object is defined in the
+// board file (src/Hal/Boards/<board>/BoardConfig.cpp), which is where the backend is chosen.
+extern KryonDisplay& tft;
 
 // --- Board Lifecycle ---
 void initHardware(void);

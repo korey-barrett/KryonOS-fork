@@ -3,9 +3,10 @@
 
 #include <TFT_eSPI.h>
 
+#include "Hal/Display/KryonDisplay.h"
 class SettingsUI {
 public:
-    static void init(TFT_eSPI *tft);
+    static void init(KryonDisplay *tft);
     static void draw();
     static void handleTouch(uint16_t x, uint16_t y);
 
@@ -40,7 +41,7 @@ public:
     static void drawOTAError(const String& errorMsg);
 
 private:
-    static TFT_eSPI *tftInstance;
+    static KryonDisplay *tftInstance;
     static bool otaErrorShown;
 };
 

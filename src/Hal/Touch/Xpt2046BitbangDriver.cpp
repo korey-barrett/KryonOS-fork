@@ -4,7 +4,8 @@
 #include "Hal/Touch/TouchConfig.h"
 
 #include <Arduino.h>
-#include <TFT_eSPI.h>
+#include "Hal/Display/KryonDisplay.h"
+#include <TFT_eSPI.h> // TFT_* colour and *_DATUM macros for the calibration screen
 
 // This translation unit is the only one that touches the XPT2046 GPIOs, so every T_*_PIN use is
 // guarded here rather than leaking into the facade or the factory.
@@ -58,8 +59,8 @@ uint16_t Xpt2046BitbangDriver::transfer16(uint8_t cmd) {
     return data;
 }
 
-void Xpt2046BitbangDriver::begin(TFT_eSPI* tft) {
-    tft_ = tft;
+void Xpt2046BitbangDriver::begin(KryonDisplay* display) {
+    display_ = display;
 
     pinMode(T_CS_PIN, OUTPUT);
     digitalWrite(T_CS_PIN, HIGH);
@@ -125,7 +126,7 @@ void Xpt2046BitbangDriver::setCalibration(const uint16_t* parameters) {
     cal_.set(parameters);
 }
 
-static void drawCornerArrow(TFT_eSPI* tft, uint8_t corner, uint8_t size, uint32_t color,
+static void drawCornerArrow(KryonDisplay* tft, uint8_t corner, uint8_t size, uint32_t color,
                             int16_t width, int16_t height) {
     if (!tft) return;
     switch (corner) {
@@ -154,27 +155,27 @@ static void drawCornerArrow(TFT_eSPI* tft, uint8_t corner, uint8_t size, uint32_
 
 void Xpt2046BitbangDriver::calibrate(uint16_t* parameters, uint32_t color_fg, uint32_t color_bg,
                                      uint8_t size) {
-    if (!tft_ || !parameters) return;
+    if (!display_ || !parameters) return;
 
-    tft_->fillScreen(color_bg);
-    tft_->setTextColor(color_fg, color_bg);
-    tft_->setTextDatum(MC_DATUM);
-    tft_->drawString("Touch the arrows", Display::centerX(), Display::centerY(), 2);
+    display_->fillScreen(color_bg);
+    display_->setTextColor(color_fg, color_bg);
+    display_->setTextDatum(MC_DATUM);
+    display_->drawString("Touch the arrows", Display::centerX(), Display::centerY(), 2);
 
     int16_t values[] = {0, 0, 0, 0, 0, 0, 0, 0};
     uint16_t x_tmp, y_tmp;
-    int16_t _width = tft_->width();
-    int16_t _height = tft_->height();
+    int16_t _width = display_->width();
+    int16_t _height = display_->height();
 
     for (uint8_t i = 0; i < 4; i++) {
         // Clear all 4 arrow positions
-        tft_->fillRect(0, 0, size + 1, size + 1, color_bg);
-        tft_->fillRect(0, _height - size - 1, size + 1, size + 1, color_bg);
-        tft_->fillRect(_width - size - 1, 0, size + 1, size + 1, color_bg);
-        tft_->fillRect(_width - size - 1, _height - size - 1, size + 1, size + 1, color_bg);
+        display_->fillRect(0, 0, size + 1, size + 1, color_bg);
+        display_->fillRect(0, _height - size - 1, size + 1, size + 1, color_bg);
+        display_->fillRect(_width - size - 1, 0, size + 1, size + 1, color_bg);
+        display_->fillRect(_width - size - 1, _height - size - 1, size + 1, size + 1, color_bg);
 
         // Draw active arrow in RED (color_fg)
-        drawCornerArrow(tft_, i, size, color_fg, _width, _height);
+        drawCornerArrow(display_, i, size, color_fg, _width, _height);
 
         // Wait for user to touch the arrow
         while (!getTouchRaw(&x_tmp, &y_tmp)) {
@@ -182,7 +183,7 @@ void Xpt2046BitbangDriver::calibrate(uint16_t* parameters, uint32_t color_fg, ui
         }
 
         // Visual feedback: change arrow color to GREEN while pressed!
-        drawCornerArrow(tft_, i, size, TFT_GREEN, _width, _height);
+        drawCornerArrow(display_, i, size, TFT_GREEN, _width, _height);
 
         // Accumulate 8 samples while touching
         for (uint8_t j = 0; j < 8; j++) {
@@ -202,10 +203,10 @@ void Xpt2046BitbangDriver::calibrate(uint16_t* parameters, uint32_t color_fg, ui
         }
 
         // Clear arrow area
-        tft_->fillRect(0, 0, size + 1, size + 1, color_bg);
-        tft_->fillRect(0, _height - size - 1, size + 1, size + 1, color_bg);
-        tft_->fillRect(_width - size - 1, 0, size + 1, size + 1, color_bg);
-        tft_->fillRect(_width - size - 1, _height - size - 1, size + 1, size + 1, color_bg);
+        display_->fillRect(0, 0, size + 1, size + 1, color_bg);
+        display_->fillRect(0, _height - size - 1, size + 1, size + 1, color_bg);
+        display_->fillRect(_width - size - 1, 0, size + 1, size + 1, color_bg);
+        display_->fillRect(_width - size - 1, _height - size - 1, size + 1, size + 1, color_bg);
 
         delay(300); // Debounce between corners
     }
@@ -267,7 +268,7 @@ void Xpt2046BitbangDriver::calibrate(uint16_t* parameters, uint32_t color_fg, ui
 #if !KRYONOS_TOUCH_HAS_BITBANG_PINS
 
 uint16_t Xpt2046BitbangDriver::transfer16(uint8_t cmd) { (void)cmd; return 0; }
-void Xpt2046BitbangDriver::begin(TFT_eSPI* tft) { tft_ = tft; }
+void Xpt2046BitbangDriver::begin(KryonDisplay* display) { display_ = display; }
 bool Xpt2046BitbangDriver::getTouchRaw(uint16_t* x, uint16_t* y) { (void)x; (void)y; return false; }
 bool Xpt2046BitbangDriver::getTouch(uint16_t* x, uint16_t* y, uint16_t threshold) {
     (void)x; (void)y; (void)threshold;

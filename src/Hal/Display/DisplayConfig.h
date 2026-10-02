@@ -67,6 +67,18 @@
   #endif
 #endif
 
+// --- Display backend --------------------------------------------------------------------------
+// Which KryonDisplay implementation the board file instantiates. This is compile-time on purpose:
+// it decides the static type of the display object, so it cannot be a string compared at runtime
+// the way KRYONOS_TOUCH_DRIVER is. Set it from the environment, e.g.
+//     -D KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RAM
+// See Documentation/Display_Touch_Architecture.md §5.
+#define KRYONOS_BACKEND_TFT_ESPI 1 // src/Hal/Display/TftEspiDisplay.h -- the real panel driver
+#define KRYONOS_BACKEND_RAM      2 // src/Hal/Display/RamFramebufferDisplay.h -- RAM framebuffer
+#ifndef KRYONOS_DISPLAY_BACKEND
+  #define KRYONOS_DISPLAY_BACKEND KRYONOS_BACKEND_TFT_ESPI
+#endif
+
 namespace kryon_display {
 
 // Compile-time sanity: a zero or negative dimension is always a configuration mistake.

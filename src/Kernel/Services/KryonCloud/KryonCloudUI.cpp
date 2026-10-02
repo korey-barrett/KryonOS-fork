@@ -9,7 +9,7 @@ static inline const UiMetrics& M() { return UiLayout::current(); }
 
 extern int currentState;
 
-TFT_eSPI *KryonCloudUI::tftInstance = nullptr;
+KryonDisplay *KryonCloudUI::tftInstance = nullptr;
 CloudUISubState KryonCloudUI::currentSubState = CLOUD_STATE_OVERVIEW;
 int KryonCloudUI::selectedIndex = 0;
 int KryonCloudUI::scrollOffset = 0;
@@ -273,7 +273,7 @@ void KryonCloudUI::showLoadingScreen(const String& status, int progressPct) {
     tftInstance->drawString((String(progressPct) + "%").c_str(), pctArea.cx(), pctArea.cy(), 2);
 }
 
-void KryonCloudUI::init(TFT_eSPI *tft) {
+void KryonCloudUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 

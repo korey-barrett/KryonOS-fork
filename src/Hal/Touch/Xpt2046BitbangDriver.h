@@ -15,7 +15,7 @@ class Xpt2046BitbangDriver : public ITouchDriver {
 public:
     const char* name() const override { return "xpt2046-bitbang"; }
 
-    void begin(TFT_eSPI* tft) override;
+    void begin(KryonDisplay* display) override;
     bool getTouchRaw(uint16_t* x, uint16_t* y) override;
     bool getTouch(uint16_t* x, uint16_t* y, uint16_t threshold) override;
     void setCalibration(const uint16_t* parameters) override;
@@ -26,7 +26,7 @@ public:
 private:
     uint16_t transfer16(uint8_t cmd);
 
-    TFT_eSPI* tft_ = nullptr;
+    KryonDisplay* display_ = nullptr;
     kryon_touch::CalibrationData cal_;
 };
 

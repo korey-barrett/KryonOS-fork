@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
+#include "Hal/Display/KryonDisplay.h"
 #include "KryonCloudManager.h"
 #include "KryonCloudAI.h"
 
@@ -18,14 +19,14 @@ enum CloudUISubState {
 
 class KryonCloudUI {
 public:
-    static void init(TFT_eSPI *tft);
+    static void init(KryonDisplay *tft);
     static void draw();
     static void handleTouch(uint16_t x, uint16_t y);
     static void loop();
     static void resetToHome();
 
 private:
-    static TFT_eSPI *tftInstance;
+    static KryonDisplay *tftInstance;
     static CloudUISubState currentSubState;
     static int selectedIndex;
     static int scrollOffset;

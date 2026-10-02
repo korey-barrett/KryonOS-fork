@@ -20,11 +20,11 @@
 // sub-screens that each repeat the same frame/header/footer geometry; M() keeps them consistent.
 static inline const UiMetrics& M() { return UiLayout::current(); }
 
-TFT_eSPI *SettingsUI::tftInstance = nullptr;
+KryonDisplay *SettingsUI::tftInstance = nullptr;
 bool SettingsUI::otaErrorShown = false;
 bool showResetDialog = false;
 
-void SettingsUI::init(TFT_eSPI *tft) {
+void SettingsUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 
@@ -33,7 +33,7 @@ void SettingsUI::init(TFT_eSPI *tft) {
 // a footer holding one centred action. They were copy-pasted into each of the dozen screens; drawing
 // them from one place keeps the screens aligned and leaves each one spelling out only what is
 // actually different about it.
-static void drawSettingsBackdrop(TFT_eSPI* t, uint16_t borderColor = TFT_GREEN) {
+static void drawSettingsBackdrop(KryonDisplay* t, uint16_t borderColor = TFT_GREEN) {
     const UiMetrics& m = M();
     t->fillScreen(TFT_BLACK);
     t->drawRoundRect(m.frame.x, m.frame.y, m.frame.w, m.frame.h, 5, TFT_WHITE);
@@ -41,7 +41,7 @@ static void drawSettingsBackdrop(TFT_eSPI* t, uint16_t borderColor = TFT_GREEN) 
     t->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, borderColor);
 }
 
-static void drawSettingsFrame(TFT_eSPI* t, const char* title,
+static void drawSettingsFrame(KryonDisplay* t, const char* title,
                               uint16_t borderColor = TFT_GREEN, uint16_t titleColor = TFT_GREEN) {
     const UiMetrics& m = M();
     drawSettingsBackdrop(t, borderColor);
@@ -50,7 +50,7 @@ static void drawSettingsFrame(TFT_eSPI* t, const char* title,
     t->drawString(title, m.header.cx(), m.headerTextY, m.fontBody);
 }
 
-static void drawSettingsFooter(TFT_eSPI* t, const char* label) {
+static void drawSettingsFooter(KryonDisplay* t, const char* label) {
     const UiMetrics& m = M();
     t->drawRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_WHITE);
     t->setTextColor(TFT_WHITE, TFT_BLACK);
@@ -60,7 +60,7 @@ static void drawSettingsFooter(TFT_eSPI* t, const char* label) {
 
 // Same footer, but for the screens whose body is a scrollable list: the UP and DN thirds move the
 // selection. Without them a touch-only device could never reach an item that fell off a short panel.
-static void drawSettingsFooterScroll(TFT_eSPI* t, const char* label) {
+static void drawSettingsFooterScroll(KryonDisplay* t, const char* label) {
     const UiMetrics& m = M();
     t->drawRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_WHITE);
     t->setTextColor(TFT_WHITE, TFT_BLACK);
@@ -635,21 +635,21 @@ static bool fetchGitHubStarsLive() {
     return false;
 }
 
-static void drawMiniStar(TFT_eSPI *tft, int cx, int cy, uint16_t color) {
+static void drawMiniStar(KryonDisplay *tft, int cx, int cy, uint16_t color) {
     if (!tft) return;
     tft->fillTriangle(cx, cy - 5, cx - 2, cy + 3, cx + 2, cy + 3, color);
     tft->fillTriangle(cx - 5, cy - 2, cx + 5, cy - 2, cx, cy + 3, color);
     tft->fillTriangle(cx - 3, cy + 2, cx + 3, cy + 2, cx, cy - 4, color);
 }
 
-static void drawMiniHeart(TFT_eSPI *tft, int cx, int cy, uint16_t color) {
+static void drawMiniHeart(KryonDisplay *tft, int cx, int cy, uint16_t color) {
     if (!tft) return;
     tft->fillCircle(cx - 2, cy - 2, 2, color);
     tft->fillCircle(cx + 2, cy - 2, 2, color);
     tft->fillTriangle(cx - 4, cy - 1, cx + 4, cy - 1, cx, cy + 4, color);
 }
 
-static void drawMiniSparkle(TFT_eSPI *tft, int cx, int cy, uint16_t color) {
+static void drawMiniSparkle(KryonDisplay *tft, int cx, int cy, uint16_t color) {
     if (!tft) return;
     tft->fillTriangle(cx, cy - 4, cx - 3, cy, cx + 3, cy, color);
     tft->fillTriangle(cx, cy + 4, cx - 3, cy, cx + 3, cy, color);
@@ -1854,7 +1854,7 @@ static int mDay = 1, mMonth = 1, mYear = 2026, mHour = 12, mMinute = 0;
 static bool loadedManual = false;
 
 // An up triangle, a value box and a down triangle, all anchored to the spinner rect.
-static void drawTimeSpinner(TFT_eSPI* t, const UiMetrics& m, const UiRect& r, const String& val) {
+static void drawTimeSpinner(KryonDisplay* t, const UiMetrics& m, const UiRect& r, const String& val) {
     const int16_t triH = (int16_t)(m.rowH / 2);
     const int16_t boxY = spinnerBoxY(r, m);
 

@@ -6,7 +6,7 @@
 #include "../Services/IPCManager.h"
 
 duk_context *HarixKernel::ctx = nullptr;
-TFT_eSPI *HarixKernel::tftInstance = nullptr;
+KryonDisplay *HarixKernel::tftInstance = nullptr;
 
 #include <esp_heap_caps.h>
 
@@ -114,7 +114,7 @@ static void my_fatal(void *udata, const char *msg) {
     ESP.restart(); // Reboot when they close it
 }
 
-void HarixKernel::init(TFT_eSPI *tft) {
+void HarixKernel::init(KryonDisplay *tft) {
     tftInstance = tft;
     NotificationManager::init();
     IPCManager::init();

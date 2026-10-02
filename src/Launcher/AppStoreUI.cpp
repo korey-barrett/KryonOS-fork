@@ -17,7 +17,7 @@ static inline const UiMetrics& M() { return UiLayout::current(); }
 // The App Store's four-zone footer (BACK / UP / SEL / DN). Labels are drawn on the centre of the
 // very zone that handleTouch() tests, so the two can never drift apart. At 240x320 this lands on
 // the historical x positions 35 / 100 / 165 / 220 with dividers at 70 / 130 / 200.
-static void drawStoreFooter(TFT_eSPI* tft, const UiMetrics& m) {
+static void drawStoreFooter(KryonDisplay* tft, const UiMetrics& m) {
     tft->drawRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_WHITE);
     tft->setTextColor(TFT_WHITE, TFT_BLACK);
     tft->setTextDatum(MC_DATUM);
@@ -32,7 +32,7 @@ static void drawStoreFooter(TFT_eSPI* tft, const UiMetrics& m) {
 
 // One list row — "> name" when selected, "  name" otherwise. The fill rect, the text inset and the
 // baseline all come from UiLayout, the same values handleTouch() hit-tests against.
-static void drawAppStoreRow(TFT_eSPI* tft, const UiMetrics& m, int visibleIndex,
+static void drawAppStoreRow(KryonDisplay* tft, const UiMetrics& m, int visibleIndex,
                             const String& name, bool selected) {
     const UiRect   row   = m.listRowRect(visibleIndex);
     const int16_t  textX = (int16_t)(row.x + m.rowTextPadX);
@@ -53,7 +53,7 @@ static void drawAppStoreRow(TFT_eSPI* tft, const UiMetrics& m, int visibleIndex,
 
 extern int currentState;
 
-TFT_eSPI *AppStoreUI::tftInstance = nullptr;
+KryonDisplay *AppStoreUI::tftInstance = nullptr;
 
 int AppStoreUI::storeState = 0;
 bool AppStoreUI::isUpdateMode = false;
@@ -77,7 +77,7 @@ bool AppStoreUI::downloadInProgress = false;
 
 const char* INDEX_URL = "https://raw.githubusercontent.com/Haris16-code/KryonOS-AppStore/refs/heads/main/index.json";
 
-void AppStoreUI::init(TFT_eSPI *tft) {
+void AppStoreUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 

@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 
+#include "Hal/Display/KryonDisplay.h"
 #include "Hal/Touch/TouchConfig.h"
 #include "Hal/Touch/TouchDriverFactory.h"
 #include "Hal/Display/DisplayConfig.h"
@@ -23,7 +24,7 @@
 class TouchDriver {
 public:
     // Binds the driver to the display instance and brings up its pins/bus. Idempotent.
-    static void init(TFT_eSPI *tft);
+    static void init(KryonDisplay *tft);
 
     // Calibrated pixel coordinates in the live logical canvas (see Display). False when there is
     // no touch. `threshold` is the XPT2046 pressure threshold; absolute-position drivers ignore it.

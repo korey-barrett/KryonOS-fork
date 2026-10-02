@@ -4,7 +4,7 @@
 #include "../Keyboard/MyKeyboard.h"
 #include "../UI/UiLayout.h"
 
-TFT_eSPI *WebServerAppUI::tftInstance = nullptr;
+KryonDisplay *WebServerAppUI::tftInstance = nullptr;
 
 // Shared rects so draw() and handleTouch() can never disagree. At 240x320 these reproduce the
 // historical literals: Set User (12,182,104,32), Set Pass (124,182,104,32), toggle (45,230,150,36).
@@ -31,7 +31,7 @@ WebAppRects webAppRects(const UiMetrics& m) {
 }
 } // namespace
 
-void WebServerAppUI::init(TFT_eSPI *tft) {
+void WebServerAppUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 

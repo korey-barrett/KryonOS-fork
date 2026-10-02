@@ -2,11 +2,12 @@
 #define LAUNCHER_UI_H
 
 #include <TFT_eSPI.h>
+#include "Hal/Display/KryonDisplay.h"
 #include <Arduino.h>
 
 class LauncherUI {
 public:
-    static void init(TFT_eSPI *tft);
+    static void init(KryonDisplay *tft);
     static void draw();
     static void handleTouch(uint16_t x, uint16_t y);
     static void requestRescan();
@@ -14,7 +15,7 @@ public:
     static bool needsRescan;
 
 private:
-    static TFT_eSPI *tftInstance;
+    static KryonDisplay *tftInstance;
     static void drawButton(int x, int y, int w, int h, const char* label, uint32_t color);
     
     static String appPaths[50];   // Path to app folder or .js file

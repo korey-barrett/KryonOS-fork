@@ -3,17 +3,18 @@
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
+#include "Hal/Display/KryonDisplay.h"
 #include <ArduinoJson.h>
 
 class HelpCenterUI {
 public:
-    static void init(TFT_eSPI *tft);
+    static void init(KryonDisplay *tft);
     static void draw();
     static void update();
     static void handleTouch(uint16_t x, uint16_t y);
 
 private:
-    static TFT_eSPI *tftInstance;
+    static KryonDisplay *tftInstance;
     
     // 0: Main Menu (Offline vs Online)
     // 1: Offline Categories

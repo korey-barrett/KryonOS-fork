@@ -19,7 +19,7 @@ static inline const UiMetrics& M() { return UiLayout::current(); }
 namespace {
 const int MARQUEE_GAP = 6;   // spaces appended so a repeat is visibly separated from its predecessor
 
-String marqueeSlice(TFT_eSPI* tft, const String& text, int pos, int maxWidth, uint8_t font) {
+String marqueeSlice(KryonDisplay* tft, const String& text, int pos, int maxWidth, uint8_t font) {
     String scrollText = text + "      ";
     const int len = scrollText.length();
     String out = "";
@@ -46,7 +46,7 @@ inline int viewerZoneFromX(const UiMetrics& m, int16_t x) {
 }
 } // namespace
 
-TFT_eSPI* HelpCenterUI::tftInstance = nullptr;
+KryonDisplay* HelpCenterUI::tftInstance = nullptr;
 
 int HelpCenterUI::uiState = 0;
 int HelpCenterUI::selectedIndex = 0;
@@ -95,7 +95,7 @@ const char* offContent3[] = {
 };
 
 
-void HelpCenterUI::init(TFT_eSPI *tft) {
+void HelpCenterUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 

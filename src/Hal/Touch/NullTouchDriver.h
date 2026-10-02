@@ -10,7 +10,7 @@ class NullTouchDriver : public ITouchDriver {
 public:
     const char* name() const override { return "none"; }
 
-    void begin(TFT_eSPI* tft) override { (void)tft; }
+    void begin(KryonDisplay* display) override { (void)display; }
     bool getTouchRaw(uint16_t* x, uint16_t* y) override { (void)x; (void)y; return false; }
     bool getTouch(uint16_t* x, uint16_t* y, uint16_t threshold) override {
         (void)x; (void)y; (void)threshold;

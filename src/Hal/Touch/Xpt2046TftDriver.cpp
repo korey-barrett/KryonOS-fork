@@ -1,5 +1,6 @@
 #include "Hal/Touch/Xpt2046TftDriver.h"
 
+#include "Hal/Display/KryonDisplay.h"
 #include "Hal/Touch/TouchConfig.h"
 
 #include <Arduino.h>
@@ -7,8 +8,10 @@
 
 #if KRYONOS_TOUCH_HAS_TFT_TOUCH
 
-void Xpt2046TftDriver::begin(TFT_eSPI* tft) {
-    tft_ = tft;
+void Xpt2046TftDriver::begin(KryonDisplay* display) {
+    // This driver is TFT_eSPI's own touch path, so it needs the TFT_eSPI instance behind the
+    // display. A backend without one leaves tft_ null and every call below returns false.
+    tft_ = display ? display->nativeTft() : nullptr;
     if (TOUCH_CS >= 0) {
         pinMode(TOUCH_CS, OUTPUT);
         digitalWrite(TOUCH_CS, HIGH);
@@ -48,7 +51,7 @@ void Xpt2046TftDriver::calibrate(uint16_t* parameters, uint32_t color_fg, uint32
 // when TOUCH_CS is defined.
 #if !KRYONOS_TOUCH_HAS_TFT_TOUCH
 
-void Xpt2046TftDriver::begin(TFT_eSPI* tft) { tft_ = tft; }
+void Xpt2046TftDriver::begin(KryonDisplay* display) { (void)display; }
 bool Xpt2046TftDriver::getTouchRaw(uint16_t* x, uint16_t* y) { (void)x; (void)y; return false; }
 bool Xpt2046TftDriver::getTouch(uint16_t* x, uint16_t* y, uint16_t threshold) {
     (void)x; (void)y; (void)threshold;

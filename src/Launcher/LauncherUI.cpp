@@ -23,7 +23,7 @@ static inline bool isHeaderItem(int item) {
     return item == ITEM_SYSTEM_HEADER || item == ITEM_APPS_HEADER;
 }
 
-TFT_eSPI *LauncherUI::tftInstance = nullptr;
+KryonDisplay *LauncherUI::tftInstance = nullptr;
 String LauncherUI::appPaths[50];
 String LauncherUI::appNames[50];
 bool   LauncherUI::appIsFolder[50];
@@ -36,7 +36,7 @@ void LauncherUI::requestRescan() {
     needsRescan = true;
 }
 
-void LauncherUI::init(TFT_eSPI *tft) {
+void LauncherUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 
@@ -249,7 +249,7 @@ void LauncherUI::draw() {
     tftInstance->drawString("DN",  m.footerButtonCenterX(UI_FOOTER_DN),  m.footerTextY, m.fontBody);
 }
 
-static void runApp(TFT_eSPI* tft, const String& path, bool isFolder) {
+static void runApp(KryonDisplay* tft, const String& path, bool isFolder) {
     extern int currentState;
     currentState = 2; // STATE_RUN_APP
     

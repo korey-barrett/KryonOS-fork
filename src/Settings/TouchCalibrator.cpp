@@ -5,9 +5,9 @@
 
 extern int currentState;
 
-TFT_eSPI *TouchCalibrator::tftInstance = nullptr;
+KryonDisplay *TouchCalibrator::tftInstance = nullptr;
 
-void TouchCalibrator::init(TFT_eSPI *tft) {
+void TouchCalibrator::init(KryonDisplay *tft) {
     tftInstance = tft;
     TouchDriver::init(tft);
 }

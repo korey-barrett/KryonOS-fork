@@ -26,7 +26,7 @@
 
 static std::vector<JSWebSocket*> g_activeWebSockets;
 
-TFT_eSPI* JSBindings::tftInstance = nullptr;
+KryonDisplay* JSBindings::tftInstance = nullptr;
 TFT_eSprite* JSBindings::tftSprite = nullptr;
 bool JSBindings::useSprite = false;
 
@@ -979,7 +979,13 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
         tftSprite = nullptr;
     }
     
-    tftSprite = new TFT_eSprite(tftInstance);
+    // TFT_eSprite needs a TFT_eSPI instance; a backend without one has no sprites at all.
+    TFT_eSPI* native = tftInstance->nativeTft();
+    if (!native) {
+        duk_push_boolean(ctx, false);
+        return 1;
+    }
+    tftSprite = new TFT_eSprite(native);
     
     void* ptr = nullptr;
     
@@ -2466,7 +2472,7 @@ static void grantSessionStorage(const String& pkg) {
 }
 
 static bool promptStoragePermission(const String& pkg, const String& targetPath) {
-    TFT_eSPI* tft = JSBindings::getTFT();
+    KryonDisplay* tft = JSBindings::getTFT();
     if (!tft) return false;
 
     // Draw native modal dialog (centered 220x210 box)
@@ -3388,7 +3394,10 @@ duk_ret_t JSBindings::js_3d_begin(duk_context *ctx) {
         sprite3D = nullptr;
     }
     
-    sprite3D = new TFT_eSprite(tftInstance);
+    // As in js_createSprite: a sprite is a TFT_eSPI object, so a backend without one cannot host it.
+    TFT_eSPI* native = tftInstance ? tftInstance->nativeTft() : nullptr;
+    if (!native) return 0;
+    sprite3D = new TFT_eSprite(native);
     sprite3D->setColorDepth(depth);
     void* ptr = sprite3D->createSprite(w, h);
     
@@ -3812,7 +3821,7 @@ duk_ret_t JSBindings::js_3d_directDraw(duk_context *ctx) {
 // Init - Register ALL bindings
 // =====================================================
 
-void JSBindings::init(duk_context *ctx, TFT_eSPI *tft) {
+void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     tftInstance = tft;
 
     // --- System Object ---

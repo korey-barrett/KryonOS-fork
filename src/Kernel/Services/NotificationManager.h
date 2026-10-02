@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 
+#include "Hal/Display/KryonDisplay.h"
 enum NotificationIconType {
     NOTIF_ICON_INFO = 0,
     NOTIF_ICON_WARNING = 1,
@@ -51,28 +52,28 @@ public:
     static int post(const String& title, const String& message, const String& iconStr = "info", uint32_t durationMs = 3000, bool playSound = false);
     static bool dismiss(uint32_t id);
     static void clearAll();
-    static void updateAndRender(TFT_eSPI* tft);
+    static void updateAndRender(KryonDisplay* tft);
     static bool hasActiveNotification();
-    static TFT_eSprite* getShadowSprite(TFT_eSPI* tft = nullptr);
+    static TFT_eSprite* getShadowSprite(KryonDisplay* tft = nullptr);
 
 private:
     static NotificationItem s_queue[MAX_NOTIFICATIONS];
     static size_t s_count;
     static uint32_t s_nextId;
-    static TFT_eSPI* s_lastTft;
+    static KryonDisplay* s_lastTft;
     static TFT_eSprite* s_cardSprite;
     static TFT_eSprite* s_shadowSprite;
     static uint16_t* s_savedBg;
     static bool s_bgCaptured;
 
     static void ensureMetrics();
-    static void ensureSprites(TFT_eSPI* tft);
+    static void ensureSprites(KryonDisplay* tft);
     static void captureBackground();
-    static void restoreBgRegion(TFT_eSPI* tft, int16_t y, int16_t h);
-    static void restoreBgFull(TFT_eSPI* tft);
+    static void restoreBgRegion(KryonDisplay* tft, int16_t y, int16_t h);
+    static void restoreBgFull(KryonDisplay* tft);
     static void renderSpriteContent(const NotificationItem& item);
-    static void pushCardToScreen(TFT_eSPI* tft, int16_t y);
-    static void advanceQueue(TFT_eSPI* tft);
+    static void pushCardToScreen(KryonDisplay* tft, int16_t y);
+    static void advanceQueue(KryonDisplay* tft);
 };
 
 #endif // NOTIFICATION_MANAGER_H

@@ -25,7 +25,7 @@
 
 #include <stdint.h>
 
-class TFT_eSPI;
+class KryonDisplay;
 
 class ITouchDriver {
 public:
@@ -34,10 +34,11 @@ public:
     // Short stable name for boot logs ("xpt2046-bitbang", "ft6236", ...).
     virtual const char* name() const = 0;
 
-    // Bring up pins / bus. `tft` is needed only by drivers that draw (calibration) or that
-    // delegate to TFT_eSPI's own touch path; capacitive drivers may ignore it. It is a pointer to
-    // the one global display instance and outlives the driver.
-    virtual void begin(TFT_eSPI* tft) = 0;
+    // Bring up pins / bus. `display` is needed only by drivers that draw (calibration) or that
+    // delegate to TFT_eSPI's own touch path -- the latter reaches that through
+    // KryonDisplay::nativeTft() and must cope with a nullptr; capacitive drivers may ignore it
+    // entirely. It is a pointer to the one global display instance and outlives the driver.
+    virtual void begin(KryonDisplay* display) = 0;
 
     // Raw controller counts. False when there is no touch to report.
     virtual bool getTouchRaw(uint16_t* x, uint16_t* y) = 0;

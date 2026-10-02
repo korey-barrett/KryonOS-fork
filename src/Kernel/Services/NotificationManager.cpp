@@ -17,7 +17,7 @@ int16_t NotificationManager::SHADOW_W  = 240;
 int16_t NotificationManager::SHADOW_H  = 64;
 size_t NotificationManager::s_count = 0;
 uint32_t NotificationManager::s_nextId = 1;
-TFT_eSPI* NotificationManager::s_lastTft = nullptr;
+KryonDisplay* NotificationManager::s_lastTft = nullptr;
 TFT_eSprite* NotificationManager::s_cardSprite = nullptr;
 TFT_eSprite* NotificationManager::s_shadowSprite = nullptr;
 uint16_t* NotificationManager::s_savedBg = nullptr;
@@ -44,7 +44,7 @@ void NotificationManager::ensureMetrics() {
     SHADOW_H  = m.shadowH > 96 ? 96 : m.shadowH;
 }
 
-TFT_eSprite* NotificationManager::getShadowSprite(TFT_eSPI* tft) {
+TFT_eSprite* NotificationManager::getShadowSprite(KryonDisplay* tft) {
     if (tft) s_lastTft = tft;
     if (!s_shadowSprite && s_lastTft) {
         ensureSprites(s_lastTft);
@@ -53,13 +53,19 @@ TFT_eSprite* NotificationManager::getShadowSprite(TFT_eSPI* tft) {
 }
 
 // ── Sprite allocation ────────────────────────────────────────────────────────
-void NotificationManager::ensureSprites(TFT_eSPI* tft) {
+void NotificationManager::ensureSprites(KryonDisplay* tft) {
     if (!tft) return;
     s_lastTft = tft;
     ensureMetrics();
 
+    // The notification card is composited in a TFT_eSprite, so this path needs a backend that has
+    // a TFT_eSPI underneath it. A backend without one gets no notifications rather than a crash;
+    // KryonSprite will remove that restriction.
+    TFT_eSPI* native = tft->nativeTft();
+    if (!native) return;
+
     if (!s_cardSprite) {
-        s_cardSprite = new TFT_eSprite(tft);
+        s_cardSprite = new TFT_eSprite(native);
         if (s_cardSprite) {
             void* buf = s_cardSprite->createSprite(CARD_W, CARD_H);
             if (!buf) {
@@ -70,7 +76,7 @@ void NotificationManager::ensureSprites(TFT_eSPI* tft) {
     }
 
     if (!s_shadowSprite) {
-        s_shadowSprite = new TFT_eSprite(tft);
+        s_shadowSprite = new TFT_eSprite(native);
         if (s_shadowSprite) {
             void* buf = s_shadowSprite->createSprite(SHADOW_W, SHADOW_H);
             if (buf) {
@@ -106,7 +112,7 @@ void NotificationManager::captureBackground() {
     }
 }
 
-void NotificationManager::restoreBgRegion(TFT_eSPI* tft, int16_t y, int16_t h) {
+void NotificationManager::restoreBgRegion(KryonDisplay* tft, int16_t y, int16_t h) {
     if (!tft || h <= 0 || y >= SHADOW_H) return;
     if (y < 0) { h += y; y = 0; }
     if (y + h > SHADOW_H) h = SHADOW_H - y;
@@ -119,7 +125,7 @@ void NotificationManager::restoreBgRegion(TFT_eSPI* tft, int16_t y, int16_t h) {
     }
 }
 
-void NotificationManager::restoreBgFull(TFT_eSPI* tft) {
+void NotificationManager::restoreBgFull(KryonDisplay* tft) {
     if (!tft) return;
     if (s_savedBg && s_bgCaptured) {
         tft->pushImage(0, 0, SHADOW_W, SHADOW_H, s_savedBg);
@@ -169,7 +175,7 @@ void NotificationManager::renderSpriteContent(const NotificationItem& item) {
 }
 
 // ── Push the card sprite to the screen at position Y ────────────────────────
-void NotificationManager::pushCardToScreen(TFT_eSPI* tft, int16_t y) {
+void NotificationManager::pushCardToScreen(KryonDisplay* tft, int16_t y) {
     if (!tft || !s_cardSprite) return;
 
     uint16_t* sprBuf = (uint16_t*)s_cardSprite->getPointer();
@@ -288,7 +294,7 @@ bool NotificationManager::hasActiveNotification() {
 }
 
 // ── Advance queue to next notification ──────────────────────────────────────
-void NotificationManager::advanceQueue(TFT_eSPI* tft) {
+void NotificationManager::advanceQueue(KryonDisplay* tft) {
     if (s_count == 0) return;
 
     for (size_t i = 0; i < s_count - 1; i++) {
@@ -311,7 +317,7 @@ void NotificationManager::advanceQueue(TFT_eSPI* tft) {
 }
 
 // ── Main update & render loop (called from System.delay) ────────────────────
-void NotificationManager::updateAndRender(TFT_eSPI* tft) {
+void NotificationManager::updateAndRender(KryonDisplay* tft) {
     if (!tft) return;
     s_lastTft = tft;
 

@@ -2,6 +2,7 @@
 #define INSTALLER_UI_H
 
 #include <TFT_eSPI.h>
+#include "Hal/Display/KryonDisplay.h"
 #include <Arduino.h>
 #include <vector>
 #include "../FileSystem/FileSystem.h"
@@ -23,7 +24,7 @@ struct AppMetadata {
 
 class InstallerUI {
 private:
-    static TFT_eSPI *tftInstance;
+    static KryonDisplay *tftInstance;
     static FileEntry files[200];
     static int fileCount;
     static String currentPath;
@@ -49,7 +50,7 @@ private:
 
 public:
     static String autoInstallPath;
-    static void init(TFT_eSPI *tft);
+    static void init(KryonDisplay *tft);
     static void draw();
     static void handleTouch(uint16_t x, uint16_t y);
 };
