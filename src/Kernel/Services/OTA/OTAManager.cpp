@@ -1,5 +1,6 @@
 #include "OTAManager.h"
 #include "../Network/TLSHelper.h"
+#include "Hal/Display/DisplayConfig.h"
 #include <ArduinoJson.h>
 
 Preferences OTAManager::prefs;
@@ -17,17 +18,11 @@ void OTAManager::init() {
 }
 
 String OTAManager::getBoardTargetName() {
-#if defined(TARGET_CARDPUTER)
-    return "m5stack-cardputer";
-#elif defined(TARGET_T_HMI)
-    return "lilygo-t-hmi";
-#elif defined(TARGET_CYD)
-    return "esp32-cyd-28";
-#elif defined(CONFIG_IDF_TARGET_ESP32S3) || (ARDUINO_USB_CDC_ON_BOOT == 1)
-    return "esp32-s3-devkitc-1-n16r8";
-#else
-    return "esp32doit-devkit-v1";
-#endif
+    // The manifest key is KRYONOS_BOARD_ID and nothing else. Keeping a second copy of the board
+    // name here (a TARGET_* ladder) is how the OTA map and the CI build matrix drifted apart
+    // before; the id now has exactly one definition, in Hal/Display/DisplayConfig.h, and the
+    // release workflow's board list must spell the same strings.
+    return KRYONOS_BOARD_ID;
 }
 
 bool OTAManager::isVerGreater(const String& newVer, const String& currVer) {

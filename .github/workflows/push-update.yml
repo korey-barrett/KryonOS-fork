@@ -10,11 +10,9 @@ on:
         default: 'all'
         options:
           - 'all'
-          - 'esp32-s3-devkitc-1-n16r8'
-          - 'm5stack-cardputer'
-          - 'lilygo-t-hmi'
-          - 'esp32-cyd-28'
-          - 'esp32doit-devkit-v1'
+          - 'esp32-default'
+          - 'esp32s3-default'
+          - 'esp32s31-default'
 
       update_type:
         description: 'Update Type'
@@ -57,32 +55,20 @@ on:
         type: string
         default: 'Flash via Web Flasher:\nkryonos.harislab.tech/flasher'
 
-      ota_s3_devkit:
-        description: '[OTA Toggle] Enable OTA for esp32-s3-devkitc-1-n16r8?'
+      ota_esp32_default:
+        description: '[OTA Toggle] Enable OTA for esp32-default?'
         required: true
         type: boolean
         default: true
 
-      ota_cardputer:
-        description: '[OTA Toggle] Enable OTA for m5stack-cardputer?'
+      ota_esp32s3_default:
+        description: '[OTA Toggle] Enable OTA for esp32s3-default?'
         required: true
         type: boolean
         default: true
 
-      ota_t_hmi:
-        description: '[OTA Toggle] Enable OTA for lilygo-t-hmi?'
-        required: true
-        type: boolean
-        default: true
-
-      ota_cyd_28:
-        description: '[OTA Toggle] Enable OTA for esp32-cyd-28?'
-        required: true
-        type: boolean
-        default: true
-
-      ota_devkit_v1:
-        description: '[OTA Toggle] Enable OTA for esp32doit-devkit-v1?'
+      ota_esp32s31_default:
+        description: '[OTA Toggle] Enable OTA for esp32s31-default? (preview env — no CI binary is produced, so leave this off)'
         required: true
         type: boolean
         default: false
@@ -118,11 +104,9 @@ jobs:
           API_LEVEL_IN: ${{ inputs.api_level_override }}
           RELEASE_TAG_IN: ${{ inputs.release_tag }}
           UNSUPPORTED_GUIDE: ${{ inputs.unsupported_ota_guide }}
-          OTA_S3: ${{ inputs.ota_s3_devkit }}
-          OTA_CARDPUTER: ${{ inputs.ota_cardputer }}
-          OTA_THMI: ${{ inputs.ota_t_hmi }}
-          OTA_CYD: ${{ inputs.ota_cyd_28 }}
-          OTA_DEVKIT: ${{ inputs.ota_devkit_v1 }}
+          OTA_ESP32: ${{ inputs.ota_esp32_default }}
+          OTA_ESP32S3: ${{ inputs.ota_esp32s3_default }}
+          OTA_ESP32S31: ${{ inputs.ota_esp32s31_default }}
         run: |
           set -euo pipefail
 
@@ -194,12 +178,12 @@ jobs:
           print(f"Resolved Version: {final_version} | API Level: {final_api}")
           print(f"Resolved Changelog:\n{changelog}")
 
+          # Board keys must match KRYONOS_BOARD_ID (Hal/Display/DisplayConfig.h) and the
+          # release workflow's build matrix. See the comment in release.yml.
           ota_flags = {
-              "esp32-s3-devkitc-1-n16r8": os.environ["OTA_S3"].lower() == "true",
-              "m5stack-cardputer": os.environ["OTA_CARDPUTER"].lower() == "true",
-              "lilygo-t-hmi": os.environ["OTA_THMI"].lower() == "true",
-              "esp32-cyd-28": os.environ["OTA_CYD"].lower() == "true",
-              "esp32doit-devkit-v1": os.environ["OTA_DEVKIT"].lower() == "true",
+              "esp32-default": os.environ["OTA_ESP32"].lower() == "true",
+              "esp32s3-default": os.environ["OTA_ESP32S3"].lower() == "true",
+              "esp32s31-default": os.environ["OTA_ESP32S31"].lower() == "true",
           }
 
           manifest_path = Path("updates/esp32/v2/update.json")
@@ -232,11 +216,9 @@ jobs:
               data["release"]["changelog"] = changelog
 
           all_boards = [
-              "esp32-s3-devkitc-1-n16r8",
-              "m5stack-cardputer",
-              "lilygo-t-hmi",
-              "esp32-cyd-28",
-              "esp32doit-devkit-v1"
+              "esp32-default",
+              "esp32s3-default",
+              "esp32s31-default"
           ]
 
           boards_to_process = all_boards if target_board == "all" else [target_board]

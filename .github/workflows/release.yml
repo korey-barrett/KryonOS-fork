@@ -57,8 +57,15 @@ jobs:
           echo "Tag '${TAG}' is available. Proceeding to compile boards..."
 
   # =========================================================================
-  # JOB 2: Compile All 5 Boards Simultaneously (Only Runs if Tag is New)
+  # JOB 2: Compile Every Release Target Simultaneously (Only Runs if Tag is New)
   # =========================================================================
+  # The board list below must stay in step with two other places:
+  #   * updates/esp32/v2/update.json — the OTA manifest's "boards" keys
+  #   * src/Hal/Display/DisplayConfig.h — KRYONOS_BOARD_ID, which the firmware
+  #     reports as its manifest key (OTAManager::getBoardTargetName)
+  # A board missing from any of the three silently breaks OTA for that board.
+  # esp32s31-default is deliberately absent: it is a preview environment on the
+  # ESP-IDF 6.1 toolchain and does not compile on a stock CI runner yet.
   build:
     name: Compile ${{ matrix.board }}
     needs: validate-tag
@@ -67,11 +74,8 @@ jobs:
       fail-fast: false
       matrix:
         board:
-          - esp32-s3-devkitc-1-n16r8
-          - lilygo-t-hmi
-          - m5stack-cardputer
-          - esp32-cyd-28
-          - esp32doit-devkit-v1
+          - esp32-default
+          - esp32s3-default
 
     steps:
       - name: Checkout Repository
@@ -119,8 +123,10 @@ jobs:
           BUILD_DIR=".pio/build/${BOARD_ENV}"
           mkdir -p out
 
+          # The classic ESP32 reserves the first 0x1000 bytes for the (unused) secure-boot IV;
+          # the S3 places its bootloader at 0x0000. Get this wrong and the board will not boot.
           case "${BOARD_ENV}" in
-            esp32-cyd-28|esp32doit-devkit-v1)
+            esp32-default)
               BOOT_OFFSET="0x1000"
               ;;
             *)
