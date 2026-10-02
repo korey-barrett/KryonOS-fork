@@ -85,6 +85,10 @@ private:
 
 // CST816S/CST816T, 7-bit address 0x15. Register map: 0x01 gesture, 0x02 finger count,
 // 0x03 XH / 0x04 XL / 0x05 YH / 0x06 YL (low nibble of the high byte holds bits 8-11).
+//
+// A CST820 answers to the same address with the same map -- 0x02 burst, 0xA7 chip ID, high nibble
+// masked, and it ignores the auto-sleep register some drivers write at 0xFE -- so the Waveshare
+// ESP32-S3-Touch-LCD-2.1B's touch controller binds here unchanged despite the different part number.
 class Cst816Driver : public I2cTouchDriver {
 public:
     Cst816Driver() : I2cTouchDriver(0x15) { setName("cst816"); }

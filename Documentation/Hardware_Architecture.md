@@ -22,6 +22,14 @@ own `TARGET_*` name for real hardware (see `Display_Touch_Architecture.md` §6).
 | **ESP32-S3 default** *(primary)* | `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16MB / 8MB OPI | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 6.5 MB |
 | **ESP32 default** | `esp32-default` | ESP32 (Xtensa LX6) | 4MB / None | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 3 MB (`huge_app.csv`) — **no OTA** |
 | **ESP32-S31** *(preview)* | `esp32s31-default` | ESP32-S31 (RISC-V) | 16MB / 16MB OPI | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 16 MB table |
+| **Waveshare ESP32-S3-Touch-LCD-2.1B** *(preview)* | `waveshare-s3-lcd21b` | ESP32-S3 (Xtensa LX7) | 16MB / 8MB OPI | ST7701 480x480 **RGB parallel** | not wired yet (CST816S planned) | 16 MB table |
+
+The Waveshare row is the one target that is a specific product rather than a generic bring-up board, and
+the first whose panel is not on SPI at all: an RGB parallel bus has no SPI pixel path, so TFT_eSPI
+cannot drive it and the display comes up through `esp_lcd_panel_rgb` instead
+(`src/Hal/Display/EspLcdRgbDisplay.cpp`; see `Display_Touch_Architecture.md` §2.5). It is **not** in
+`default_envs` — build it with `pio run -e waveshare-s3-lcd21b`. Its touch controller is not wired in
+this pass, so the board reports `hasTouch() == false`.
 
 The S31 requires ESP-IDF v6.1, which only arduino-esp32 **4.x** reaches, so `esp32s31-default` pins the
 pioarduino **pre-release** platform `61.04.00-RC1` (Arduino 4.0.0-RC1 / IDF 6.1) instead of the stable
@@ -62,6 +70,9 @@ src/Hal/
 │   │   ├── BoardConfig.h
 │   │   └── BoardConfig.cpp
 │   ├── esp32s31/                       <-- ESP32-S31 default board (TARGET_ESP32S31_DEFAULT)
+│   ├── waveshare-s3-lcd21b/            <-- Waveshare ESP32-S3-Touch-LCD-2.1B (TARGET_WAVESHARE_S3_LCD21B)
+│   │   ├── BoardConfig.h
+│   │   └── BoardConfig.cpp
 │   ├── board_configs/
 │   │   └── examples/                   <-- NOT built; reference snippets + README
 │   │       ├── cardputer.ini
@@ -126,6 +137,15 @@ pio run -e esp32-default
 ```powershell
 pio run -e esp32s31-default
 ```
+
+### Waveshare ESP32-S3-Touch-LCD-2.1B (preview — RGB parallel panel, not built by `pio run`):
+```powershell
+pio run -e waveshare-s3-lcd21b
+```
+Unlike every other target, this panel is not on SPI, so the `TFT_*` pin flags do not apply to it. Its
+`build_flags` define no pins at all and select `KRYONOS_BACKEND_RGB`; the panel's pins, init sequence,
+I²C expander and backlight are all owned by `EspLcdRgbDisplay`. See
+`Display_Touch_Architecture.md` §2.5 before editing that block.
 
 ### A different panel size — no code changes:
 Edit the `-D KRYONOS_DISPLAY_WIDTH` / `_HEIGHT` / `_ROTATION` lines under the environment in

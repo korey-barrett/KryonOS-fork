@@ -26,6 +26,13 @@
       "version": "2.0.1",
       "type": "patch",
       "changelog": "- Security Hardening, Permissions & Runtime Improvements"
+    },
+    "waveshare-s3-lcd21b": {
+      "supports_ota": false,
+      "guide": "Download your board's firmware binaries from GitHub Releases and flash them using an ESP32 flasher.",
+      "version": "2.0.1",
+      "type": "patch",
+      "changelog": "- Security Hardening, Permissions & Runtime Improvements"
     }
   }
 }

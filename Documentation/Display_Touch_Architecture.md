@@ -16,6 +16,9 @@ panel + XPT2046 touch), not a specific product — copy it and give it your own 
 | `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | yes | 6.5 MB — ample headroom |
 | `esp32-default` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | yes | 1.96 MB — **1,493 bytes free**, see below |
 | `esp32s31-default` | ESP32-S31 (RISC-V) | 16 MB / 16 MB | Arduino 4.0.0-RC1 / IDF 6.1 | **no — preview** | 16 MB table (`default_16MB.csv`) |
+| `waveshare-s3-lcd21b` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | **no — one product** | 16 MB table (`default_16MB.csv`) |
+
+`waveshare-s3-lcd21b` is the first board whose panel is not on SPI at all — see §2.5.
 
 `esp32-default` originally used `min_spiffs.csv` — the largest app partition a 4 MB ESP32 offers while
 keeping two OTA slots — and the firmware filled 99.9% of it (**1,964,587 of 1,966,080 bytes, leaving
@@ -165,6 +168,7 @@ type**, each behind a positive guard set by its environment in `platformio.ini`:
 | :--- | :--- | :--- |
 | `esp32s3-default` | `TARGET_ESP32S3_DEFAULT` | `src/Hal/Boards/esp32s3/BoardConfig.cpp` |
 | `esp32-default` | `TARGET_ESP32_DEFAULT` | `src/Hal/Boards/esp32/BoardConfig.cpp` |
+| `waveshare-s3-lcd21b` | `TARGET_WAVESHARE_S3_LCD21B` | `src/Hal/Boards/waveshare-s3-lcd21b/BoardConfig.cpp` |
 
 > **Trap:** these files used to be guarded by an *inverse* condition
 > (`#if !defined(TARGET_CARDPUTER) && !defined(TARGET_CYD) && !defined(TARGET_T_HMI)`). Adding a new
@@ -185,6 +189,61 @@ TouchDriver::init(&tft);
 This is why the Cardputer's intended `setRotation(1)` (landscape) has never taken effect. The
 resolution/rotation work moves this into a single `Display::begin()` so rotation comes from the board
 profile.
+
+### 2.5 A non-TFT_eSPI backend: the RGB parallel panel
+
+`esp32s3-default` and `esp32-default` both drive SPI panels through TFT_eSPI, but TFT_eSPI cannot
+drive every panel. The Waveshare ESP32-S3-Touch-LCD-2.1B carries a **480×480 ST7701 on a 16-bit RGB
+parallel bus** (16 data lines plus DE/PCLK/VSYNC/HSYNC), with a 3-wire SPI-like bus used *only* for
+init commands. There is no SPI pixel path, so the only route is ESP-IDF's `esp_lcd_panel_rgb` — which
+means a `KryonDisplay` backend that is not a TFT_eSPI adapter:
+`src/Hal/Display/EspLcdRgbDisplay.{h,cpp}`, selected by `KRYONOS_BACKEND_RGB` (value 3 in
+`DisplayConfig.h`).
+
+The design problem is text. Every UI label is drawn through TFT_eSPI's fonts, and TFT_eSPI's own
+rasterizer is non-virtual, so a backend that does not use TFT_eSPI loses every glyph and every
+`textWidth()` metric that `UiLayout` depends on. (`RamFramebufferDisplay` is exactly that: a correct
+reference surface with no font.) The RGB backend therefore keeps **TFT_eSPI as a pure software
+rasterizer**: it draws into a full-screen 16bpp `TFT_eSprite` in PSRAM and blits that sprite to the
+panel, so the glyphs, metrics and anti-aliasing are pixel-identical to the SPI boards.
+
+Three details are worth knowing before touching it:
+
+- **The sprite is the rasterizer's target, not the panel.** `TFT_eSprite` derives from `TFT_eSPI`, so
+  it inherits `drawString`/`textWidth`/`setTextDatum`/`color565`, and its virtual `drawPixel` /
+  `drawChar` / `pushColor` land in the sprite buffer. The *composite* shapes are the trap: TFT_eSPI's
+  `drawRect`, `fillRoundRect`, `fillCircle`, `fillTriangle`, `fillScreen` and friends are **not**
+  virtual and not overridden by `TFT_eSprite`, so calling them on a sprite reaches the TFT_eSPI
+  implementations and would push pixels at an unconfigured bus. The backend implements those itself on
+  top of the sprite's primitives.
+- **The sprite's buffer is byte-swapped, the panel's is not.** `TFT_eSprite` writes every 16bpp pixel
+  as `(color >> 8) | (color << 8)` because it was built to feed an SPI panel. The RGB framebuffer is
+  native little-endian, and `esp_lcd_panel_rgb` exposes no byte-order knob, so `present()` swaps on
+  the way out and `pushImage` swaps on the way in (`canvas_.setSwapBytes(true)`), keeping
+  `KryonDisplay`'s colour domain native everywhere.
+- **The phantom TFT_eSPI.** The sprite's constructor needs a `TFT_eSPI*`, so the backend owns a
+  `TFT_eSPI` instance that is never `init()`ed and owns no pins. Its environment therefore defines
+  `USER_SETUP_LOADED`, a placeholder driver macro and the `LOAD_*` fonts — **and no pin macros at
+  all**. That last part is load-bearing twice over: `I2CEngine::begin()` refuses a bus whose pins
+  collide with any `TFT_*`/`TOUCH_*` macro, and this board's expander and touch controller share I²C on
+  GPIO15/GPIO7. The phantom's own `TFT_WIDTH`/`TFT_HEIGHT` are not set from the environment: the
+  driver's own defines set them unconditionally, so a `-D` would lose the race and only earn a
+  redefinition warning. They never matter here, because the canvas is created at the panel's native
+  size and every geometry call this backend makes goes to the sprite or to a method it implements
+  itself.
+
+The blit itself is the route this board's own shipped firmware takes: `esp_lcd_panel_draw_bitmap()`
+over the full frame, with two framebuffers in PSRAM and a bounce buffer. Writing into the framebuffer
+directly instead would mean owning `esp_cache_msync()` here, which is only needed by code that fills
+the framebuffer itself.
+
+> **Trap: PlatformIO compiles every `src/*.cpp` for every environment.** A backend that includes a
+> header only some targets ship therefore breaks the *other* environments at compile time, not at link
+> time. `EspLcdRgbDisplay.{h,cpp}` include `<esp_lcd_panel_rgb.h>`, which exists for the ESP32-S3 and
+> P4 but not for the classic ESP32, so both files are wrapped in
+> `#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ARDUINO_ESP32S3_DEV)` and expand to an empty
+> translation unit elsewhere — the same way a board file compiles to nothing when its `TARGET_*` guard
+> is false. Any new backend must carry an equivalent guard around its target-specific includes.
 
 ---
 
@@ -393,6 +452,15 @@ is a `KryonDisplay` backend built on `esp_lcd` (Phase 5, §7).
    macro, all `TFT_*` / `SPI_*` flags, the `KRYONOS_DISPLAY_*` flags, and the touch pins. A panel that
    is not an XPT2046 also needs `-D KRYONOS_TOUCH_DRIVER=\"<name>\"` and, for a capacitive one, the
    `KRYONOS_TOUCH_I2C_SDA` / `_SCL` bus pins (§3.2).
+
+   **If the panel is not on SPI**, do not follow that flag list. An RGB parallel panel cannot be
+   driven by TFT_eSPI at all, so it needs `-D KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RGB` (§2.5) and
+   TFT_eSPI compiled as a rasterizer only: `USER_SETUP_LOADED`, a placeholder driver macro and the
+   `LOAD_*` fonts — and **no pin macros**, nor `TFT_WIDTH`/`TFT_HEIGHT` (the driver's own defines win).
+   Omitting every pin macro is
+   not a shortcut: `I2CEngine::begin()` rejects a bus whose pins collide with one, which would take
+   out the panel's own expander and touch controller. `[env:waveshare-s3-lcd21b]` in `platformio.ini`
+   is the worked example.
 2. **Profile header/impl.** Add `src/Hal/Boards/<board>/BoardConfig.h` and `.cpp`, both guarded by
    `#if defined(TARGET_<BOARD>)`, implementing the `Board.h` surface (global `tft`, capabilities, touch,
    backlight, SD, keyboard/battery). Provide `#ifndef` defaults for the resolution macros. The fastest

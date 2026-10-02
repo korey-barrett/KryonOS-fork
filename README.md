@@ -132,6 +132,14 @@
       <td>XPT2046 Touch</td>
     </tr>
     <tr>
+      <td><strong>Waveshare ESP32-S3-Touch-LCD-2.1B</strong></td>
+      <td><em>Preview</em></td>
+      <td>ESP32-S3</td>
+      <td>16MB Flash, 8MB Octal PSRAM</td>
+      <td>ST7701 480x480 RGB Parallel</td>
+      <td>Not wired yet (CST816S planned)</td>
+    </tr>
+    <tr>
       <td><strong>M5Stack Cardputer v1.1</strong></td>
       <td><em>Experimental</em></td>
       <td>ESP32-S3 (Stamp-S3)</td>

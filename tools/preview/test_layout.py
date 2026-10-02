@@ -234,6 +234,9 @@ def test_board_discovery() -> None:
     # One default board per chip type; all three set the canvas explicitly to 240x320.
     for env in ("esp32-default", "esp32s3-default", "esp32s31-default"):
         check_eq(boards.get(env), (240, 320, 0), f"{env} -> 240x320 rotation 0")
+    # The one product board so far, and the only non-SPI panel: a square 480x480 RGB canvas.
+    check_eq(boards.get("waveshare-s3-lcd21b"), (480, 480, 0),
+             "waveshare-s3-lcd21b -> 480x480 rotation 0")
     # The legacy boards are examples, not build targets: they must NOT be discovered.
     for env in ("m5stack-cardputer", "esp32-cyd-28", "lilygo-t-hmi", "esp32-s3-devkitc-1-n16r8",
                 "esp32doit-devkit-v1"):

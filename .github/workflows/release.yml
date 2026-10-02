@@ -76,6 +76,7 @@ jobs:
         board:
           - esp32-default
           - esp32s3-default
+          - waveshare-s3-lcd21b
 
     steps:
       - name: Checkout Repository

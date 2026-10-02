@@ -84,6 +84,18 @@ public:
      * a KryonSprite, which any backend can supply.
      */
     virtual TFT_eSPI* nativeTft() { return nullptr; }
+
+    // --- Frame presentation -----------------------------------------------------------------
+    /**
+     * Push any pending drawing to the panel. A backend that writes straight through to its
+     * controller (TftEspiDisplay) has nothing to do here, which is why this is NOT pure and
+     * defaults to a no-op. A backend that rasterizes into a framebuffer (EspLcdRgbDisplay, and any
+     * future RAM/partial-refresh panel) overrides it to blit.
+     *
+     * The main loop calls this once per iteration, so an implementation is expected to cheap out
+     * when nothing has been drawn -- see the dirty-flag pattern in EspLcdRgbDisplay.
+     */
+    virtual void present() {}
 };
 
 #endif // KRYON_DISPLAY_H

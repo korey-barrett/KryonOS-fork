@@ -13,6 +13,7 @@ on:
           - 'esp32-default'
           - 'esp32s3-default'
           - 'esp32s31-default'
+          - 'waveshare-s3-lcd21b'
 
       update_type:
         description: 'Update Type'
@@ -73,6 +74,12 @@ on:
         type: boolean
         default: false
 
+      ota_waveshare_s3_lcd21b:
+        description: '[OTA Toggle] Enable OTA for waveshare-s3-lcd21b? (single-product board — leave this off)'
+        required: true
+        type: boolean
+        default: false
+
 permissions:
   contents: write
 
@@ -107,6 +114,7 @@ jobs:
           OTA_ESP32: ${{ inputs.ota_esp32_default }}
           OTA_ESP32S3: ${{ inputs.ota_esp32s3_default }}
           OTA_ESP32S31: ${{ inputs.ota_esp32s31_default }}
+          OTA_WAVESHARE_S3_LCD21B: ${{ inputs.ota_waveshare_s3_lcd21b }}
         run: |
           set -euo pipefail
 
@@ -184,6 +192,7 @@ jobs:
               "esp32-default": os.environ["OTA_ESP32"].lower() == "true",
               "esp32s3-default": os.environ["OTA_ESP32S3"].lower() == "true",
               "esp32s31-default": os.environ["OTA_ESP32S31"].lower() == "true",
+              "waveshare-s3-lcd21b": os.environ["OTA_WAVESHARE_S3_LCD21B"].lower() == "true",
           }
 
           manifest_path = Path("updates/esp32/v2/update.json")
@@ -218,7 +227,8 @@ jobs:
           all_boards = [
               "esp32-default",
               "esp32s3-default",
-              "esp32s31-default"
+              "esp32s31-default",
+              "waveshare-s3-lcd21b"
           ]
 
           boards_to_process = all_boards if target_board == "all" else [target_board]

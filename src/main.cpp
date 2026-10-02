@@ -364,6 +364,10 @@ void loop() {
     // Floating Notification compositor overlay
     NotificationManager::updateAndRender(&tft);
 
+    // Flush any pending frame. No-op on the TFT_eSPI backend, which writes straight to the panel;
+    // on the RGB backend this is what copies the PSRAM canvas to the panel.
+    tft.present();
+
     // Yield to let ESP32 handle background tasks
     delay(10);
 }

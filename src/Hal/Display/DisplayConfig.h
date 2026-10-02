@@ -56,6 +56,8 @@
     #define KRYONOS_BOARD_ID "esp32-default"
   #elif defined(TARGET_ESP32S31_DEFAULT)
     #define KRYONOS_BOARD_ID "esp32s31-default"
+  #elif defined(TARGET_WAVESHARE_S3_LCD21B)
+    #define KRYONOS_BOARD_ID "waveshare-s3-lcd21b"
   #elif defined(TARGET_CYD)
     #define KRYONOS_BOARD_ID "esp32-cyd-28"
   #elif defined(TARGET_T_HMI)
@@ -72,9 +74,11 @@
 // it decides the static type of the display object, so it cannot be a string compared at runtime
 // the way KRYONOS_TOUCH_DRIVER is. Set it from the environment, e.g.
 //     -D KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RAM
-// See Documentation/Display_Touch_Architecture.md §5.
+// See Documentation/Display_Touch_Architecture.md §2 (and §2.5 for the RGB backend, whose files
+// compile only on targets that ship ESP-IDF's RGB panel driver).
 #define KRYONOS_BACKEND_TFT_ESPI 1 // src/Hal/Display/TftEspiDisplay.h -- the real panel driver
 #define KRYONOS_BACKEND_RAM      2 // src/Hal/Display/RamFramebufferDisplay.h -- RAM framebuffer
+#define KRYONOS_BACKEND_RGB      3 // src/Hal/Display/EspLcdRgbDisplay.h -- RGB parallel panel (S3/P4 only)
 #ifndef KRYONOS_DISPLAY_BACKEND
   #define KRYONOS_DISPLAY_BACKEND KRYONOS_BACKEND_TFT_ESPI
 #endif

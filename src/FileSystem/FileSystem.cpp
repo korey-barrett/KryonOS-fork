@@ -133,6 +133,12 @@ bool FileSystem::init() {
     // is the generic ESP32 map (esp32-default), whose SCK/MOSI 14/13 and CS 15 are this board's TFT
     // pins.
     sdMounted = (initSD() != nullptr);
+#elif defined(TARGET_WAVESHARE_S3_LCD21B)
+    // MUST NOT fall into the #else below: that map drives GPIO15, which on this board is the I2C
+    // SDA line shared by the TCA9554 expander and the touch controller. Its SD slot is on SPI and
+    // shares GPIO1/GPIO2 with the panel's 3-wire command bus, so mounting belongs after display
+    // init -- delegate to the board layer, which currently reports "no card".
+    sdMounted = (initSD() != nullptr);
 #else
     pinMode(15, OUTPUT);
     digitalWrite(15, HIGH);
@@ -631,6 +637,10 @@ bool FileSystem::mountSD() {
                  SD.begin(42, *sdSPI, 1000000, "/sd", 5, false) || 
                  SD.begin(42, *sdSPI, 400000, "/sd", 5, false));
 #elif defined(TARGET_CYD)
+    sdMounted = (initSD() != nullptr);
+#elif defined(TARGET_WAVESHARE_S3_LCD21B)
+    // See the note in the first SD branch: the generic map below drives GPIO15, which is this
+    // board's I2C SDA. Delegate to the board layer instead.
     sdMounted = (initSD() != nullptr);
 #else
     if (!sdSPI) return false;
