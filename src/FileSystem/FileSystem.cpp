@@ -130,7 +130,8 @@ bool FileSystem::init() {
 #elif defined(TARGET_CYD)
     // CYD has its own micro-SD slot on a dedicated VSPI bus. Delegate to the board layer so the pin
     // map lives in one place (cyd/BoardConfig.cpp). Do not fold this into the #else below: that one
-    // is the esp32doit-devkit-v1 map, whose SCK/MOSI 14/13 and CS 15 are this board's TFT pins.
+    // is the generic ESP32 map (esp32-default), whose SCK/MOSI 14/13 and CS 15 are this board's TFT
+    // pins.
     sdMounted = (initSD() != nullptr);
 #else
     pinMode(15, OUTPUT);
@@ -581,19 +582,21 @@ String FileSystem::getFileMD5(const char* path) {
     File file = targetFS->open(relPath.c_str(), FILE_READ);
     if (!file || file.isDirectory()) return "";
 
+    // Use the plain (void-returning) variants: the *_ret forms were removed in mbedTLS 3.x, which
+    // the current espressif32 platform pulls in. The non-_ret names exist on both 2.x and 3.x.
     mbedtls_md5_context ctx;
     mbedtls_md5_init(&ctx);
-    mbedtls_md5_starts_ret(&ctx);
+    mbedtls_md5_starts(&ctx);
 
     uint8_t buffer[512];
     size_t len;
     while ((len = file.read(buffer, sizeof(buffer))) > 0) {
-        mbedtls_md5_update_ret(&ctx, buffer, len);
+        mbedtls_md5_update(&ctx, buffer, len);
     }
     file.close();
 
     uint8_t hash[16];
-    mbedtls_md5_finish_ret(&ctx, hash);
+    mbedtls_md5_finish(&ctx, hash);
     mbedtls_md5_free(&ctx);
 
     String hexHash = "";

@@ -85,11 +85,15 @@ On the ESP32-S3 N16R8, KryonOS takes full advantage of the **8MB Octal PSRAM (OP
 
 ## PlatformIO Configuration
 
-The build configuration is integrated into `platformio.ini` under the `[env:esp32-s3-devkitc-1-n16r8]` target:
+The build configuration lives in `platformio.ini` under the `[env:esp32s3-default]` target. That file
+is the source of truth; the excerpt below is kept in step with it by hand, so trust `platformio.ini`
+if the two ever disagree.
 
 ```ini
-[env:esp32-s3-devkitc-1-n16r8]
-platform = espressif32
+[env:esp32s3-default]
+; Pinned to the pioarduino espressif32 distribution (Arduino core 3.3.12 / IDF 5.5). The bare
+; `espressif32` spec resolves to whatever happens to be installed under that name locally.
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip
 board = esp32-s3-devkitc-1
 framework = arduino
 board_build.mcu = esp32s3
@@ -99,20 +103,26 @@ board_upload.flash_size = 16MB
 board_build.arduino.memory_type = qio_opi
 board_build.filesystem = littlefs
 board_build.partitions = default_16MB.csv
-
 monitor_speed = 115200
 
-lib_deps =
-    bodmer/TFT_eSPI@^2.5.43
-    bblanchon/ArduinoJson @ 7.1.0
-    mathieucarbou/ESPAsyncWebServer @ 3.1.5
-
 build_flags =
-    -D KRYONOS_VERSION=\"1.0.0\"
-    -D KRYONOS_API_LEVEL=1
+    ${env.build_flags}
+    -D CORE_DEBUG_LEVEL=0
+    -D TARGET_ESP32S3_DEFAULT=1
     -D BOARD_HAS_PSRAM
+    -D CONFIG_SPIRAM_USE_MALLOC=1
+    -D CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=1
+    -D ARDUINO_LOOP_STACK_SIZE=32768
     -D ARDUINO_USB_CDC_ON_BOOT=1
     -D ARDUINO_USB_MODE=1
+
+    ; --- Logical canvas: CHANGE THESE for your panel (no code edits) ---
+    ; Must equal tft.width()/height() once tft.setRotation(KRYONOS_DISPLAY_ROTATION) has run.
+    -D KRYONOS_DISPLAY_WIDTH=240
+    -D KRYONOS_DISPLAY_HEIGHT=320
+    -D KRYONOS_DISPLAY_ROTATION=0
+
+    ; --- TFT_eSPI display driver (pick the macro matching your controller) ---
     -D USER_SETUP_LOADED=1
     -D USE_HSPI_PORT=1
     -D ILI9341_DRIVER=1
@@ -122,15 +132,36 @@ build_flags =
     -D TFT_MISO=13
     -D TFT_MOSI=11
     -D TFT_SCLK=12
-    -D TOUCH_CS=7
-    -D LOAD_GLCD=1
-    -D LOAD_FONT2=1
-    -D LOAD_FONT4=1
-    -D SMOOTH_FONT=1
+    -D TFT_BL=21
+    -D TFT_BACKLIGHT_ON=HIGH
     -D SPI_FREQUENCY=40000000
     -D SPI_READ_FREQUENCY=20000000
     -D SPI_TOUCH_FREQUENCY=2500000
+
+    ; --- Resistive touch (XPT2046, bit-banged by TouchDriver) ---
+    -D TOUCH_CS=7
+    -D TOUCH_CLK=4
+    -D TOUCH_DIN=5
+    -D TOUCH_DO=6
+    -D TOUCH_IRQ=14
+
+    ; --- Fonts ---
+    -D LOAD_GLCD=1
+    -D LOAD_FONT2=1
+    -D LOAD_FONT4=1
 ```
+
+The shared `lib_deps`, `KRYONOS_VERSION` and `KRYONOS_API_LEVEL` come in through `${env.build_flags}`
+and the global `[env]` section at the top of `platformio.ini`, so they are not repeated per board.
+
+> `TARGET_ESP32S3_DEFAULT=1` is what claims this board's implementation
+> (`src/Hal/Boards/esp32s3/BoardConfig.cpp`) as the ESP32-S3 default. Board guards are **positive**:
+> every new board adds its own `TARGET_<BOARD>=1` and its own guard rather than inheriting this one.
+
+> `KRYONOS_DISPLAY_*` is the logical canvas the entire UI lays out against, and it must match
+> `tft.width()`/`tft.height()` after `tft.setRotation(KRYONOS_DISPLAY_ROTATION)`. Nothing in the UI
+> reads the panel's real geometry, so these flags are the only place the screen size is declared. See
+> `Documentation/Display_Touch_Architecture.md`.
 
 ---
 
@@ -138,16 +169,16 @@ build_flags =
 
 ### Using PlatformIO in VS Code / Antigravity IDE:
 1. Open the PlatformIO sidebar tab.
-2. Select **`env:esp32-s3-devkitc-1-n16r8`**.
+2. Select **`env:esp32s3-default`**.
 3. Click **Build** (`✓`) and **Upload** (`→`).
 
 ### Using the Command Line:
 ```bash
-# Build firmware for ESP32-S3 N16R8
-pio run -e esp32-s3-devkitc-1-n16r8
+# Build firmware for the ESP32-S3 default target
+pio run -e esp32s3-default
 
 # Upload firmware and open Serial Monitor
-pio run -e esp32-s3-devkitc-1-n16r8 -t upload -t monitor
+pio run -e esp32s3-default -t upload -t monitor
 ```
 
 ---

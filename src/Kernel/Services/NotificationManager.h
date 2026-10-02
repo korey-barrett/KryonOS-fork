@@ -34,14 +34,18 @@ struct NotificationItem {
 class NotificationManager {
 public:
     static const size_t MAX_NOTIFICATIONS = 4;
-    static const int16_t CARD_X = 8;
-    static const int16_t CARD_W = 224;
-    static const int16_t CARD_H = 42;
-    static const int16_t CARD_R = 6;
-    static const int16_t RESTING_Y = 8;
-    static const int16_t HIDDEN_Y = -44;
-    static const int16_t SHADOW_W = 240;
-    static const int16_t SHADOW_H = 64;
+
+    // Card geometry. These used to be compile-time constants hard-coded to 240x320; they are now
+    // derived from the screen metrics at runtime (ensureMetrics), which reproduces the historical
+    // values exactly on that panel: 8, 224, 42, 6, 8, -44, 240, 64.
+    static int16_t CARD_X;
+    static int16_t CARD_W;
+    static int16_t CARD_H;
+    static int16_t CARD_R;
+    static int16_t RESTING_Y;
+    static int16_t HIDDEN_Y;
+    static int16_t SHADOW_W;
+    static int16_t SHADOW_H;
 
     static void init();
     static int post(const String& title, const String& message, const String& iconStr = "info", uint32_t durationMs = 3000, bool playSound = false);
@@ -61,6 +65,7 @@ private:
     static uint16_t* s_savedBg;
     static bool s_bgCaptured;
 
+    static void ensureMetrics();
     static void ensureSprites(TFT_eSPI* tft);
     static void captureBackground();
     static void restoreBgRegion(TFT_eSPI* tft, int16_t y, int16_t h);

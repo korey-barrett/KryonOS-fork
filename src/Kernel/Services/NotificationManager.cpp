@@ -1,8 +1,20 @@
 #include "NotificationManager.h"
 #include "../../Hal/PWM/PWMEngine.h"
+#include "../../UI/UiLayout.h"
 
 // ── Static member definitions ────────────────────────────────────────────────
 NotificationItem NotificationManager::s_queue[NotificationManager::MAX_NOTIFICATIONS];
+
+// Card geometry defaults for the legacy 240x320 panel; ensureMetrics() overwrites these with the
+// live screen metrics before anything is drawn.
+int16_t NotificationManager::CARD_X    = 8;
+int16_t NotificationManager::CARD_W    = 224;
+int16_t NotificationManager::CARD_H    = 42;
+int16_t NotificationManager::CARD_R    = 6;
+int16_t NotificationManager::RESTING_Y = 8;
+int16_t NotificationManager::HIDDEN_Y  = -44;
+int16_t NotificationManager::SHADOW_W  = 240;
+int16_t NotificationManager::SHADOW_H  = 64;
 size_t NotificationManager::s_count = 0;
 uint32_t NotificationManager::s_nextId = 1;
 TFT_eSPI* NotificationManager::s_lastTft = nullptr;
@@ -13,7 +25,23 @@ bool NotificationManager::s_bgCaptured = false;
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 void NotificationManager::init() {
+    ensureMetrics();
     clearAll();
+}
+
+// ── Derive card geometry from the screen metrics ─────────────────────────────
+void NotificationManager::ensureMetrics() {
+    const UiMetrics& m = UiLayout::current();
+    CARD_X    = m.cardX;
+    CARD_W    = m.cardW;
+    CARD_H    = m.cardH;
+    CARD_R    = m.cardR;
+    RESTING_Y = m.restingY;
+    HIDDEN_Y  = m.hiddenY;
+    SHADOW_W  = m.shadowW;
+    // The shadow strip only needs to cover the card plus a little bleed; cap it so a large panel
+    // can't ask for a multi-hundred-KB sprite (SHADOW_W * SHADOW_H * 2 bytes).
+    SHADOW_H  = m.shadowH > 96 ? 96 : m.shadowH;
 }
 
 TFT_eSprite* NotificationManager::getShadowSprite(TFT_eSPI* tft) {
@@ -28,6 +56,7 @@ TFT_eSprite* NotificationManager::getShadowSprite(TFT_eSPI* tft) {
 void NotificationManager::ensureSprites(TFT_eSPI* tft) {
     if (!tft) return;
     s_lastTft = tft;
+    ensureMetrics();
 
     if (!s_cardSprite) {
         s_cardSprite = new TFT_eSprite(tft);
@@ -54,7 +83,13 @@ void NotificationManager::ensureSprites(TFT_eSPI* tft) {
     }
 
     if (!s_savedBg) {
-        s_savedBg = (uint16_t*)heap_caps_malloc(SHADOW_W * SHADOW_H * sizeof(uint16_t), MALLOC_CAP_DEFAULT);
+        // Prefer PSRAM so the background strip doesn't compete with the UI for internal heap.
+        s_savedBg = (uint16_t*)heap_caps_malloc(SHADOW_W * SHADOW_H * sizeof(uint16_t),
+                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_savedBg) {
+            s_savedBg = (uint16_t*)heap_caps_malloc(SHADOW_W * SHADOW_H * sizeof(uint16_t),
+                                                    MALLOC_CAP_DEFAULT);
+        }
         if (s_savedBg) {
             for (int i = 0; i < SHADOW_W * SHADOW_H; i++) s_savedBg[i] = 0x0821;
         }

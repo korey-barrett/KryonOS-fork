@@ -15,7 +15,7 @@ Rendering 3D scenes with double-buffering requires allocating an off-screen fram
 > [!IMPORTANT]
 > **PSRAM Recommended**: For full 16-bit high-resolution 3D gaming (e.g., 240x320 or 240x210), it is **strongly recommended to run on the ESP32-S3 DevKitC-1 N16R8** or boards equipped with 8MB/2MB Octal/Quad PSRAM.
 >
-> **Standard ESP32 (Non-PSRAM)**: If running on a board without external PSRAM (e.g. `esp32doit-devkit-v1`), use compact viewport sizes such as `Kryon3D.begin(160, 120, 16)` or 8-bit color depth `Kryon3D.begin(240, 160, 8)` to stay safely within internal SRAM boundaries.
+> **Standard ESP32 (Non-PSRAM)**: If running on a board without external PSRAM (e.g. `esp32-default`), use compact viewport sizes such as `Kryon3D.begin(160, 120, 16)` or 8-bit color depth `Kryon3D.begin(240, 160, 8)` to stay safely within internal SRAM boundaries.
 
 ---
 

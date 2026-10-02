@@ -5,6 +5,8 @@
 #include <FS.h>
 #include <TFT_eSPI.h>
 
+#include "Hal/Display/DisplayConfig.h"
+
 // Global TFT_eSPI driver instance
 extern TFT_eSPI tft;
 

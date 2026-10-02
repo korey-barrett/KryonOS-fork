@@ -1,8 +1,50 @@
 #include "HelpCenterUI.h"
 #include "../FileSystem/FileSystem.h"
+#include "../UI/UiLayout.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <LittleFS.h>
+
+// Current screen metrics. See Documentation/Display_Touch_Architecture.md.
+static inline const UiMetrics& M() { return UiLayout::current(); }
+
+// --- marquee ---------------------------------------------------------------------------------
+// Help titles and topic names can be wider than the box that holds them. Rather than clipping, the
+// UI scrolls the text through its box. That loop used to be copy-pasted four times with three
+// different hard-coded widths (200 to trigger, 210 in the header, 190 in a row); these helpers fold
+// it into one place and take the widths as arguments so they follow the panel.
+//
+// The historical 240x320 numbers are reproduced as *insets* on the containing box, which is what
+// makes them scale: header 228-28 = 200 (trigger) and 228-18 = 210 (window), list 220-30 = 190.
+namespace {
+const int MARQUEE_GAP = 6;   // spaces appended so a repeat is visibly separated from its predecessor
+
+String marqueeSlice(TFT_eSPI* tft, const String& text, int pos, int maxWidth, uint8_t font) {
+    String scrollText = text + "      ";
+    const int len = scrollText.length();
+    String out = "";
+    for (int i = 0; i < len; i++) {
+        const char c = scrollText.charAt((pos + i) % len);
+        if (tft->textWidth(out + c, font) > maxWidth) break;
+        out += c;
+    }
+    return out;
+}
+
+// --- viewer footer ---------------------------------------------------------------------------
+// The viewer draws BACK / UP / DN at the centre of each third of the width — 40 / 120 / 200 at
+// 240x320. Hit-testing the same thirds is what makes a tap land on the label it looks like it
+// should; the historical hit zones (70 / 160) did not line up with the drawn labels at all.
+inline int16_t thirdCenterX(const UiMetrics& m, int which) {
+    return (int16_t)((int32_t)m.w * (2 * which + 1) / 6);
+}
+
+inline int viewerZoneFromX(const UiMetrics& m, int16_t x) {
+    if (x < (int16_t)(m.w / 3))               return 0;   // BACK
+    if (x < (int16_t)(2 * (m.w / 3)))         return 1;   // UP
+    return 2;                                             // DN
+}
+} // namespace
 
 TFT_eSPI* HelpCenterUI::tftInstance = nullptr;
 
@@ -70,149 +112,141 @@ void HelpCenterUI::draw() {
 }
 
 void HelpCenterUI::drawMainMenu() {
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    const UiMetrics& m = M();
+    const UiRect offlineBtn = { (int16_t)(m.list.x + 10), (int16_t)(m.list.y + 35), (int16_t)(m.list.w - 20), 40 };
+    const UiRect onlineBtn  = { (int16_t)(m.list.x + 10), (int16_t)(m.list.y + 95), (int16_t)(m.list.w - 20), 40 };
+    tftInstance->drawRoundRect(m.frame.x, m.frame.y, m.frame.w, m.frame.h, 5, TFT_WHITE);
+    tftInstance->fillRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_BLACK);
+    tftInstance->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Help Center", 120, 21, 2);
-    
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
-    
+    tftInstance->drawString("Help Center", m.header.cx(), m.headerTextY, m.fontBody);
+
+    tftInstance->fillRect(m.list.x, m.list.y, m.list.w, m.list.h, TFT_BLACK);
+
     // Offline Button
     if (selectedIndex == 0) {
-        tftInstance->fillRoundRect(20, 80, 200, 40, 5, TFT_WHITE);
+        tftInstance->fillRoundRect(offlineBtn.x, offlineBtn.y, offlineBtn.w, offlineBtn.h, 5, TFT_WHITE);
         tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
     } else {
-        tftInstance->drawRoundRect(20, 80, 200, 40, 5, TFT_WHITE);
+        tftInstance->drawRoundRect(offlineBtn.x, offlineBtn.y, offlineBtn.w, offlineBtn.h, 5, TFT_WHITE);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     }
-    tftInstance->drawString("Offline Help Center", 120, 100, 2);
-    
+    tftInstance->drawString("Offline Help Center", offlineBtn.cx(), offlineBtn.cy(), m.fontBody);
+
     // Online Button
     if (selectedIndex == 1) {
-        tftInstance->fillRoundRect(20, 140, 200, 40, 5, TFT_WHITE);
+        tftInstance->fillRoundRect(onlineBtn.x, onlineBtn.y, onlineBtn.w, onlineBtn.h, 5, TFT_WHITE);
         tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
     } else {
-        tftInstance->drawRoundRect(20, 140, 200, 40, 5, TFT_WHITE);
+        tftInstance->drawRoundRect(onlineBtn.x, onlineBtn.y, onlineBtn.w, onlineBtn.h, 5, TFT_WHITE);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     }
-    tftInstance->drawString("Online Help Center", 120, 160, 2);
-    
+    tftInstance->drawString("Online Help Center", onlineBtn.cx(), onlineBtn.cy(), m.fontBody);
+
     // Footer
-    tftInstance->fillRoundRect(5, 285, 230, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+    tftInstance->fillRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_BLACK);
+    tftInstance->drawRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 120, 300, 2);
+    tftInstance->drawString("BACK", m.centerX, m.footerTextY, m.fontBody);
 }
 
 void HelpCenterUI::drawList(const String& title) {
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    const UiMetrics& m = M();
+    tftInstance->drawRoundRect(m.frame.x, m.frame.y, m.frame.w, m.frame.h, 5, TFT_WHITE);
+    tftInstance->fillRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_BLACK);
+    tftInstance->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    
-    int titleWidth = tftInstance->textWidth(title, 2);
-    if (titleWidth > 200) {
-        String scrollText = title + "      ";
-        int len = scrollText.length();
-        String shifted = "";
-        for (int i = 0; i < len; i++) {
-            char c = scrollText.charAt((titleScrollPos + i) % len);
-            if (tftInstance->textWidth(shifted + c, 2) > 210) break;
-            shifted += c;
-        }
+
+    const int16_t hdrTrigger = (int16_t)(m.header.w - 28);   // 200 at 240x320
+    const int16_t hdrWindow  = (int16_t)(m.header.w - 18);   // 210
+    if (tftInstance->textWidth(title, m.fontBody) > hdrTrigger) {
         tftInstance->setTextDatum(ML_DATUM);
-        tftInstance->drawString(shifted, 10, 21, 2);
+        tftInstance->drawString(marqueeSlice(tftInstance, title, titleScrollPos, hdrWindow, m.fontBody),
+                                (int16_t)(m.header.x + 4), m.headerTextY, m.fontBody);
     } else {
-        tftInstance->drawString(title, 120, 21, 2);
+        tftInstance->drawString(title, m.header.cx(), m.headerTextY, m.fontBody);
     }
-    
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
-    
-    int yPos = 45;
-    int itemsPerPage = 7;
-    tftInstance->setTextDatum(TL_DATUM);
-    
+
+    tftInstance->fillRect(m.list.x, m.list.y, m.list.w, m.list.h, TFT_BLACK);
+
+    int itemsPerPage = m.itemsPerPage;
+    const int16_t rowWindow = (int16_t)(m.list.w - 30);      // 190
+    tftInstance->setTextDatum(ML_DATUM);                     // shared row baseline (see listRowTextY)
+
     for (int i=0; i<itemsPerPage; i++) {
         int idx = scrollOffset + i;
         if (idx >= listCount) break;
-        
+
+        const int16_t textX = (int16_t)(m.list.x + m.rowTextPadX);
+        const int16_t textY = m.listRowTextY(i);
         if (idx == selectedIndex) {
-            tftInstance->fillRect(10, yPos, 220, 25, TFT_WHITE);
+            const UiRect fill = m.listRowFillRect(i);
+            tftInstance->fillRect(fill.x, fill.y, fill.w, fill.h, TFT_WHITE);
             tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
-            
-            int itemWidth = tftInstance->textWidth(listItems[idx], 2);
-            if (itemWidth > 190) {
-                String scrollText = listItems[idx] + "      ";
-                int len = scrollText.length();
-                String shifted = "";
-                for (int j = 0; j < len; j++) {
-                    char c = scrollText.charAt((listScrollPos + j) % len);
-                    if (tftInstance->textWidth(shifted + c, 2) > 190) break;
-                    shifted += c;
-                }
-                tftInstance->drawString("> " + shifted, 15, yPos + 4, 2);
+
+            if (tftInstance->textWidth(listItems[idx], m.fontBody) > rowWindow) {
+                tftInstance->drawString("> " + marqueeSlice(tftInstance, listItems[idx], listScrollPos,
+                                                            rowWindow, m.fontBody),
+                                        textX, textY, m.fontBody);
             } else {
-                tftInstance->drawString("> " + listItems[idx], 15, yPos + 4, 2);
+                tftInstance->drawString("> " + listItems[idx], textX, textY, m.fontBody);
             }
         } else {
             tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-            tftInstance->drawString("  " + listItems[idx], 15, yPos + 4, 2);
+            tftInstance->drawString("  " + listItems[idx], textX, textY, m.fontBody);
         }
-        yPos += 30;
     }
-    
+
     // Scrollbar
     if (listCount > itemsPerPage) {
-        int thumbH = max(20, (230 * itemsPerPage) / listCount);
-        int thumbY = 45 + (scrollOffset * (230 - thumbH)) / (listCount - itemsPerPage);
-        tftInstance->fillRect(232, 45, 3, 230, TFT_DARKGREY);
-        tftInstance->fillRect(232, thumbY, 3, thumbH, TFT_WHITE);
+        int thumbH = max((int)m.scrollThumbMin, (m.list.h * itemsPerPage) / listCount);
+        int thumbY = m.list.y + (scrollOffset * (m.list.h - thumbH)) / (listCount - itemsPerPage);
+        tftInstance->fillRect(m.scrollX, m.list.y, m.scrollW, m.list.h, TFT_DARKGREY);
+        tftInstance->fillRect(m.scrollX, thumbY, m.scrollW, thumbH, TFT_WHITE);
     }
-    
-    tftInstance->fillRoundRect(5, 285, 230, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+
+    tftInstance->fillRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_BLACK);
+    tftInstance->drawRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 35, 300, 2);
-    tftInstance->drawString("UP", 95, 300, 2);
-    tftInstance->drawString("SEL", 155, 300, 2);
-    tftInstance->drawString("DN", 215, 300, 2);
+    // Shared four-zone footer (BACK / UP / SEL / DN) — the same helper the App Store uses, so the
+    // labels sit at the centre of the zone that actually responds to a tap.
+    tftInstance->drawString("BACK", m.footerSlotCenterX(UI_SLOT_BACK), m.footerTextY, m.fontBody);
+    tftInstance->drawString("UP",   m.footerSlotCenterX(UI_SLOT_UP),   m.footerTextY, m.fontBody);
+    tftInstance->drawString("SEL",  m.footerSlotCenterX(UI_SLOT_SEL),  m.footerTextY, m.fontBody);
+    tftInstance->drawString("DN",   m.footerSlotCenterX(UI_SLOT_DN),   m.footerTextY, m.fontBody);
 }
 
 void HelpCenterUI::drawViewer() {
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    const UiMetrics& m = M();
+    tftInstance->drawRoundRect(m.frame.x, m.frame.y, m.frame.w, m.frame.h, 5, TFT_WHITE);
+    tftInstance->fillRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_BLACK);
+    tftInstance->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    
-    int titleWidth = tftInstance->textWidth(currentViewerTitle, 2);
-    if (titleWidth > 200) {
-        String scrollText = currentViewerTitle + "      ";
-        int len = scrollText.length();
-        String shifted = "";
-        for (int i = 0; i < len; i++) {
-            char c = scrollText.charAt((titleScrollPos + i) % len);
-            if (tftInstance->textWidth(shifted + c, 2) > 210) break;
-            shifted += c;
-        }
+
+    const int16_t hdrTrigger = (int16_t)(m.header.w - 28);   // 200 at 240x320
+    const int16_t hdrWindow  = (int16_t)(m.header.w - 18);   // 210
+    if (tftInstance->textWidth(currentViewerTitle, m.fontBody) > hdrTrigger) {
         tftInstance->setTextDatum(ML_DATUM);
-        tftInstance->drawString(shifted, 10, 21, 2);
+        tftInstance->drawString(marqueeSlice(tftInstance, currentViewerTitle, titleScrollPos,
+                                             hdrWindow, m.fontBody),
+                                (int16_t)(m.header.x + 4), m.headerTextY, m.fontBody);
     } else {
-        tftInstance->drawString(currentViewerTitle, 120, 21, 2);
+        tftInstance->drawString(currentViewerTitle, m.header.cx(), m.headerTextY, m.fontBody);
     }
-    
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
+
+    tftInstance->fillRect(m.list.x, m.list.y, m.list.w, m.list.h, TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(TL_DATUM);
-    
-    int yPos = 45;
+
+    int yPos = m.list.y;
     int currentLine = 0;
-    
+    const int visibleLines = (m.list.h > 0) ? (m.list.h / 16) : 1; // 14 lines at 240x320
+
     String content = currentViewerContent;
     while(content.length() > 0) {
         int splitIdx = 22; // Max chars per line
@@ -221,55 +255,58 @@ void HelpCenterUI::drawViewer() {
             int spaceIdx = content.lastIndexOf(' ', 22);
             if(spaceIdx > 0) splitIdx = spaceIdx;
         }
-        
+
         int nlIdx = content.indexOf('\n');
         if(nlIdx >= 0 && nlIdx < splitIdx) {
             splitIdx = nlIdx;
         }
-        
-        if (currentLine >= viewerScrollOffset && currentLine < viewerScrollOffset + 14) {
-            tftInstance->drawString(content.substring(0, splitIdx), 12, yPos, 2);
+
+        if (currentLine >= viewerScrollOffset && currentLine < viewerScrollOffset + visibleLines) {
+            tftInstance->drawString(content.substring(0, splitIdx), m.list.x + 2, yPos, m.fontBody);
             yPos += 16;
         }
-        
+
         content = content.substring(splitIdx);
         if(content.startsWith("\n") || content.startsWith(" ")) {
             content = content.substring(1);
         }
         currentLine++;
     }
-    
+
     // Up/Down Indicators
     if (viewerScrollOffset > 0) {
-        tftInstance->fillTriangle(220, 50, 230, 60, 210, 60, TFT_WHITE);
+        tftInstance->fillTriangle(m.list.right() - 10, m.list.y + 5, m.list.right(), m.list.y + 15, m.list.right() - 20, m.list.y + 15, TFT_WHITE);
     }
-    if (currentLine > viewerScrollOffset + 14) {
-        tftInstance->fillTriangle(220, 265, 210, 255, 230, 255, TFT_WHITE);
+    if (currentLine > viewerScrollOffset + visibleLines) {
+        tftInstance->fillTriangle(m.list.right() - 10, m.list.bottom() - 10, m.list.right() - 20, m.list.bottom() - 20, m.list.right(), m.list.bottom() - 20, TFT_WHITE);
     }
-    
-    tftInstance->fillRoundRect(5, 285, 230, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+
+    tftInstance->fillRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_BLACK);
+    tftInstance->drawRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 40, 300, 2);
-    tftInstance->drawString("UP", 120, 300, 2);
-    tftInstance->drawString("DN", 200, 300, 2);
+    // BACK / UP / DN at the centre of each third (40 / 120 / 200 at 240x320) — see viewerZoneFromX.
+    tftInstance->drawString("BACK", thirdCenterX(m, 0), m.footerTextY, m.fontBody);
+    tftInstance->drawString("UP",   thirdCenterX(m, 1), m.footerTextY, m.fontBody);
+    tftInstance->drawString("DN",   thirdCenterX(m, 2), m.footerTextY, m.fontBody);
 }
 
 void HelpCenterUI::drawDialog() {
+    const UiMetrics& m = M();
     tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_RED);
+    tftInstance->drawRoundRect(m.frame.x, m.frame.y, m.frame.w, m.frame.h, 5, TFT_WHITE);
+    tftInstance->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_RED);
     tftInstance->setTextColor(TFT_RED, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Error", 120, 21, 2);
-    
+    tftInstance->drawString("Error", m.header.cx(), m.headerTextY, m.fontBody);
+
+    const UiRect ok = m.dialogButton((int16_t)(m.dialogButtonRowY - 10), 30, 0, 1, 70);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString(dialogMessage, 120, 140, 2);
-    
-    tftInstance->drawRoundRect(85, 220, 70, 30, 5, TFT_WHITE);
+    tftInstance->drawString(dialogMessage, m.centerX, m.centerY - 20, m.fontBody);
+
+    tftInstance->drawRoundRect(ok.x, ok.y, ok.w, ok.h, 5, TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("OK", 120, 235, 2);
+    tftInstance->drawString("OK", ok.cx(), ok.cy(), m.fontBody);
 }
 
 // --- Loaders ---
@@ -310,15 +347,17 @@ bool HelpCenterUI::downloadFile(const String& url, const String& destPath, const
         dialogMessage = "Please turn on WiFi first!";
         return false;
     }
-    
+
+    const UiMetrics& m = M();
     HTTPClient http;
     http.begin(url);
-    
+
     tftInstance->fillScreen(TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString(loadingMsg, 120, 140, 2);
-    tftInstance->drawRect(30, 160, 180, 20, TFT_WHITE);
+    tftInstance->drawString(loadingMsg, m.centerX, m.centerY - 20, m.fontBody);
+    const UiRect bar = { (int16_t)(m.centerX - (m.w - 60) / 2), m.centerY, (int16_t)(m.w - 60), 20 };
+    tftInstance->drawRect(bar.x, bar.y, bar.w, bar.h, TFT_WHITE);
     
     int httpCode = http.GET();
     if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
@@ -353,8 +392,8 @@ bool HelpCenterUI::downloadFile(const String& url, const String& destPath, const
                     downloaded += readLen;
                     
                     if (totalLen > 0) {
-                        int progressWidth = map(downloaded, 0, totalLen, 0, 176);
-                        tftInstance->fillRect(32, 162, progressWidth, 16, TFT_GREEN);
+                        int progressWidth = map(downloaded, 0, totalLen, 0, bar.w - 4);
+                        tftInstance->fillRect(bar.x + 2, bar.y + 2, progressWidth, bar.h - 4, TFT_GREEN);
                     }
                 }
             } else {
@@ -468,23 +507,27 @@ bool HelpCenterUI::fetchOnlineContent(const String& url, const String& title) {
 
 void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
     extern int currentState;
-    
+    const UiMetrics& m = M();
+
     if (uiState == 0) { // Main Menu
-        if (y >= 80 && y <= 120) {
+        const UiRect offlineBtn = { (int16_t)(m.list.x + 10), (int16_t)(m.list.y + 35), (int16_t)(m.list.w - 20), 40 };
+        const UiRect onlineBtn  = { (int16_t)(m.list.x + 10), (int16_t)(m.list.y + 95), (int16_t)(m.list.w - 20), 40 };
+        if (offlineBtn.contains((int16_t)x, (int16_t)y)) {
             selectedIndex = 0; draw();
             loadOfflineCategories();
-        } else if (y >= 140 && y <= 180) {
+        } else if (onlineBtn.contains((int16_t)x, (int16_t)y)) {
             selectedIndex = 1; draw();
             if(!fetchOnlineCategories()) {
                 uiState = 6; draw();
             }
-        } else if (y >= 285) {
+        } else if (m.inFooter((int16_t)y)) {
             currentState = 0; // Launcher
         }
     }
     else if (uiState == 1 || uiState == 2 || uiState == 3 || uiState == 4) { // Lists
-        if (y >= 45 && y <= 270) {
-            int clickedAbs = scrollOffset + ((y - 45) / 30);
+        const int rowIndex = m.listRowFromY((int16_t)y);
+        if (rowIndex >= 0) {
+            int clickedAbs = scrollOffset + rowIndex;
             if (clickedAbs < listCount) {
                 if (selectedIndex != clickedAbs) {
                     selectedIndex = clickedAbs;
@@ -492,7 +535,7 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
                     lastListScrollTime = millis();
                     draw(); // Highlight
                 }
-                
+
                 if (uiState == 1) { // Off Cats -> Off Topics
                     selectedCategoryIndex = selectedIndex;
                     loadOfflineTopics(selectedCategoryIndex);
@@ -506,12 +549,15 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
                 }
             }
         }
-        else if (y >= 285) {
-            if (x < 70) { // BACK
+        else if (m.inFooter((int16_t)y)) {
+            // Same zones the labels are drawn in (footerSlotCenterX), so the two cannot drift.
+            switch (m.footerSlotFromX((int16_t)x)) {
+            case UI_SLOT_BACK:
                 if (uiState == 1 || uiState == 3) { uiState = 0; selectedIndex = 0; draw(); }
                 else if (uiState == 2) { loadOfflineCategories(); }
                 else if (uiState == 4) { if(!fetchOnlineCategories()) { uiState = 6; draw(); } }
-            } else if (x >= 70 && x < 130) { // UP
+                break;
+            case UI_SLOT_UP:
                 if (selectedIndex > 0) {
                     selectedIndex--;
                     if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
@@ -519,40 +565,55 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
                     lastListScrollTime = millis();
                     draw();
                 }
-            } else if (x >= 130 && x < 190) { // SEL
+                break;
+            case UI_SLOT_SEL:
                 if (uiState == 1) { selectedCategoryIndex = selectedIndex; loadOfflineTopics(selectedCategoryIndex); }
                 else if (uiState == 2) { loadOfflineContent(selectedCategoryIndex, selectedIndex); }
                 else if (uiState == 3) { currentCategoryName = listItems[selectedIndex]; if(!fetchOnlineTopics(listUrls[selectedIndex])) { uiState = 6; draw(); } }
                 else if (uiState == 4) { if(!fetchOnlineContent(listUrls[selectedIndex], listItems[selectedIndex])) { uiState = 6; draw(); } }
-            } else if (x >= 190) { // DN
+                break;
+            default: // UI_SLOT_DN
                 if (selectedIndex < listCount - 1) {
                     selectedIndex++;
-                    if (selectedIndex >= scrollOffset + 7) scrollOffset = selectedIndex - 6;
+                    if (selectedIndex >= scrollOffset + m.itemsPerPage) scrollOffset = selectedIndex - (m.itemsPerPage - 1);
                     listScrollPos = 0;
                     lastListScrollTime = millis();
                     draw();
                 }
+                break;
             }
         }
     }
     else if (uiState == 5) { // Viewer
-        if (y < 100) { // Scroll Up
-            if (viewerScrollOffset > 0) { viewerScrollOffset--; draw(); }
-        } else if (y > 180 && y < 270) { // Scroll Down
-            viewerScrollOffset++; draw();
-        } else if (y >= 285) {
-            if (x < 70) { // BACK
+        // The list area is split into thirds: the top third scrolls back, the bottom third forward,
+        // the middle stays inert so a tap does not scroll by accident. The historical bands were
+        // absolute (y<100 / 180<y<270), which on a short panel covered the whole list — the lower
+        // zone fell off the screen entirely and text could only ever scroll one way.
+        const int16_t third = (int16_t)(m.list.h / 3);
+        if (m.inFooter((int16_t)y)) {
+            // The footer is below the list, so it has to be tested first: its y would otherwise
+            // satisfy "past the last third" and be swallowed by the scroll-down zone.
+            switch (viewerZoneFromX(m, (int16_t)x)) {
+            case 1: // UP
+                if (viewerScrollOffset > 0) { viewerScrollOffset--; draw(); }
+                break;
+            case 2: // DN
+                viewerScrollOffset++; draw();
+                break;
+            default: // BACK
                 if (listUrls[0].length() > 0) { uiState = 4; draw(); }
                 else { loadOfflineTopics(selectedCategoryIndex); }
-            } else if (x >= 70 && x < 160) { // UP
-                if (viewerScrollOffset > 0) { viewerScrollOffset--; draw(); }
-            } else if (x >= 160) { // DN
-                viewerScrollOffset++; draw();
+                break;
             }
+        } else if (y < m.list.y + third) { // Scroll Up
+            if (viewerScrollOffset > 0) { viewerScrollOffset--; draw(); }
+        } else if (y >= m.list.y + 2 * third) { // Scroll Down
+            viewerScrollOffset++; draw();
         }
     }
     else if (uiState == 6) { // Dialog
-        if (y >= 220 && y <= 250 && x >= 85 && x <= 155) {
+        const UiRect ok = m.dialogButton((int16_t)(m.dialogButtonRowY - 10), 30, 0, 1, 70);
+        if (ok.contains((int16_t)x, (int16_t)y)) {
             uiState = 0;
             draw();
         }
@@ -560,29 +621,24 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
 }
 
 void HelpCenterUI::update() {
+    const UiMetrics& m = M();
     if (uiState == 5 && tftInstance) {
-        int titleWidth = tftInstance->textWidth(currentViewerTitle, 2);
-        if (titleWidth > 200) {
+        if (tftInstance->textWidth(currentViewerTitle, m.fontBody) > (int16_t)(m.header.w - 28)) {
             unsigned long waitTime = (titleScrollPos == 0) ? 1500 : 350;
             if (millis() - lastTitleScrollTime > waitTime) {
                 lastTitleScrollTime = millis();
-                int scrollTextLen = currentViewerTitle.length() + 6;
+                int scrollTextLen = currentViewerTitle.length() + MARQUEE_GAP;
                 titleScrollPos = (titleScrollPos + 1) % scrollTextLen;
-                
-                tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-                tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+
+                tftInstance->fillRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_BLACK);
+                tftInstance->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_GREEN);
                 tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
                 tftInstance->setTextDatum(ML_DATUM);
-                
-                String scrollText = currentViewerTitle + "      ";
-                int len = scrollText.length();
-                String shifted = "";
-                for (int i = 0; i < len; i++) {
-                    char c = scrollText.charAt((titleScrollPos + i) % len);
-                    if (tftInstance->textWidth(shifted + c, 2) > 210) break;
-                    shifted += c;
-                }
-                tftInstance->drawString(shifted, 10, 21, 2);
+
+                tftInstance->drawString(
+                    marqueeSlice(tftInstance, currentViewerTitle, titleScrollPos,
+                                 (int16_t)(m.header.w - 18), m.fontBody),
+                    (int16_t)(m.header.x + 4), m.headerTextY, m.fontBody);
             }
         }
     } else if (uiState >= 1 && uiState <= 4 && tftInstance) {
@@ -591,56 +647,47 @@ void HelpCenterUI::update() {
         else if (uiState == 2) headerTitle = offCats[selectedCategoryIndex];
         else if (uiState == 3) headerTitle = "Online Categories";
         else if (uiState == 4) headerTitle = currentCategoryName;
-        
-        int titleWidth = tftInstance->textWidth(headerTitle, 2);
-        if (titleWidth > 200) {
+
+        if (tftInstance->textWidth(headerTitle, m.fontBody) > (int16_t)(m.header.w - 28)) {
             unsigned long waitTime = (titleScrollPos == 0) ? 1500 : 350;
             if (millis() - lastTitleScrollTime > waitTime) {
                 lastTitleScrollTime = millis();
-                int scrollTextLen = headerTitle.length() + 6;
+                int scrollTextLen = headerTitle.length() + MARQUEE_GAP;
                 titleScrollPos = (titleScrollPos + 1) % scrollTextLen;
-                
-                tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-                tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+
+                tftInstance->fillRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_BLACK);
+                tftInstance->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_GREEN);
                 tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
                 tftInstance->setTextDatum(ML_DATUM);
-                
-                String scrollText = headerTitle + "      ";
-                int len = scrollText.length();
-                String shifted = "";
-                for (int i = 0; i < len; i++) {
-                    char c = scrollText.charAt((titleScrollPos + i) % len);
-                    if (tftInstance->textWidth(shifted + c, 2) > 210) break;
-                    shifted += c;
-                }
-                tftInstance->drawString(shifted, 10, 21, 2);
+
+                tftInstance->drawString(
+                    marqueeSlice(tftInstance, headerTitle, titleScrollPos,
+                                 (int16_t)(m.header.w - 18), m.fontBody),
+                    (int16_t)(m.header.x + 4), m.headerTextY, m.fontBody);
             }
         }
-        
+
         if (listCount > 0 && selectedIndex >= 0 && selectedIndex < listCount) {
-            int itemWidth = tftInstance->textWidth(listItems[selectedIndex], 2);
-            if (itemWidth > 190) {
+            const int16_t rowWindow = (int16_t)(m.list.w - 30);
+            if (tftInstance->textWidth(listItems[selectedIndex], m.fontBody) > rowWindow) {
                 unsigned long waitTime = (listScrollPos == 0) ? 1500 : 300;
                 if (millis() - lastListScrollTime > waitTime) {
                     lastListScrollTime = millis();
-                    int scrollTextLen = listItems[selectedIndex].length() + 6;
+                    int scrollTextLen = listItems[selectedIndex].length() + MARQUEE_GAP;
                     listScrollPos = (listScrollPos + 1) % scrollTextLen;
-                    
-                    int yPos = 45 + ((selectedIndex - scrollOffset) * 30);
-                    if (yPos >= 45 && yPos < 255) {
-                        tftInstance->fillRect(10, yPos, 220, 25, TFT_WHITE);
+
+                    const int vis = selectedIndex - scrollOffset;
+                    const int yPos = m.list.y + (vis * m.rowH);
+                    if (yPos >= m.list.y && yPos < m.list.y + m.itemsPerPage * m.rowH) {
+                        const UiRect fill = m.listRowFillRect(vis);
+                        tftInstance->fillRect(fill.x, fill.y, fill.w, fill.h, TFT_WHITE);
                         tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
-                        tftInstance->setTextDatum(TL_DATUM);
-                        
-                        String scrollText = listItems[selectedIndex] + "      ";
-                        int len = scrollText.length();
-                        String shifted = "";
-                        for (int j = 0; j < len; j++) {
-                            char c = scrollText.charAt((listScrollPos + j) % len);
-                            if (tftInstance->textWidth(shifted + c, 2) > 190) break;
-                            shifted += c;
-                        }
-                        tftInstance->drawString("> " + shifted, 15, yPos + 4, 2);
+                        tftInstance->setTextDatum(ML_DATUM);
+
+                        tftInstance->drawString(
+                            "> " + marqueeSlice(tftInstance, listItems[selectedIndex], listScrollPos,
+                                                rowWindow, m.fontBody),
+                            (int16_t)(fill.x + m.rowTextPadX), m.listRowTextY(vis), m.fontBody);
                     }
                 }
             }

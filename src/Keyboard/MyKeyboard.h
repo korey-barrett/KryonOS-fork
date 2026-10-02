@@ -11,8 +11,8 @@ public:
 
 private:
     static TFT_eSPI *tftInstance;
-    static void drawKeyboard(String currentText, String promptMsg, bool caps, int selectedX, int selectedY);
-    static void handleTouch(uint16_t x, uint16_t y, String &currentText, bool &caps, bool &done);
+    static void drawKeyboard(String currentText, String promptMsg, bool caps, int selectedX, int selectedY, int page);
+    static void handleTouch(uint16_t x, uint16_t y, String &currentText, bool &caps, bool &done, int &page);
 };
 
 #endif // MY_KEYBOARD_H

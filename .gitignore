@@ -3,3 +3,17 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# PC-side layout preview output (regenerate with tools/preview/preview.py)
+tools/preview/out/
+__pycache__/
+*.pyc
+
+# Optional separate PlatformIO cache for the ESP32-S31 preview toolchain — see
+# Documentation/Display_Touch_Architecture.md §5. Only created if you opt into it.
+.pio-s31/
+
+# Upstream arduino-esp32 core, when cloned into the tree for reference. PlatformIO downloads the
+# framework and its prebuilt libs itself (see Documentation/Display_Touch_Architecture.md §5), so a
+# local clone is never needed for a build.
+arduino-esp32/

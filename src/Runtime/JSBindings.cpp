@@ -1,5 +1,5 @@
 #include "JSBindings.h"
-#include "NetworkClient.h"
+#include "KryonHttpClient.h"
 #include "WebSocketClient.h"
 #include "HTTPServerEngine.h"
 #include "../Hal/PWM/PWMEngine.h"
@@ -10,6 +10,7 @@
 #include "../Kernel/Core/HarixKernel.h"
 #include "../Kernel/WiFiManager.h"
 #include "../Settings/TouchDriver.h"
+#include "../Hal/Display/Display.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Keyboard/MyKeyboard.h"
 #include "../WebManager/WebManager.h"
@@ -1474,14 +1475,12 @@ duk_ret_t JSBindings::js_color(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_screenWidth(duk_context *ctx) {
-    if (!tftInstance) { duk_push_int(ctx, 240); return 1; }
-    duk_push_int(ctx, tftInstance->width());
+    duk_push_int(ctx, Display::width());
     return 1;
 }
 
 duk_ret_t JSBindings::js_screenHeight(duk_context *ctx) {
-    if (!tftInstance) { duk_push_int(ctx, 320); return 1; }
-    duk_push_int(ctx, tftInstance->height());
+    duk_push_int(ctx, Display::height());
     return 1;
 }
 
@@ -1814,7 +1813,7 @@ duk_ret_t JSBindings::js_net_get(duk_context *ctx) {
         return 1;
     }
 
-    HttpResponse res = NetworkClient::request("GET", url, "", headers, timeoutMs);
+    HttpResponse res = KryonHttpClient::request("GET", url, "", headers, timeoutMs);
     duk_push_object(ctx);
     duk_push_int(ctx, res.status); duk_put_prop_string(ctx, -2, "status");
     duk_push_string(ctx, res.body.c_str()); duk_put_prop_string(ctx, -2, "body");
@@ -1845,7 +1844,7 @@ duk_ret_t JSBindings::js_net_post(duk_context *ctx) {
         return 1;
     }
 
-    HttpResponse res = NetworkClient::request("POST", url, body, headers, timeoutMs);
+    HttpResponse res = KryonHttpClient::request("POST", url, body, headers, timeoutMs);
     duk_push_object(ctx);
     duk_push_int(ctx, res.status); duk_put_prop_string(ctx, -2, "status");
     duk_push_string(ctx, res.body.c_str()); duk_put_prop_string(ctx, -2, "body");
@@ -1876,7 +1875,7 @@ duk_ret_t JSBindings::js_net_put(duk_context *ctx) {
         return 1;
     }
 
-    HttpResponse res = NetworkClient::request("PUT", url, body, headers, timeoutMs);
+    HttpResponse res = KryonHttpClient::request("PUT", url, body, headers, timeoutMs);
     duk_push_object(ctx);
     duk_push_int(ctx, res.status); duk_put_prop_string(ctx, -2, "status");
     duk_push_string(ctx, res.body.c_str()); duk_put_prop_string(ctx, -2, "body");
@@ -1902,7 +1901,7 @@ duk_ret_t JSBindings::js_net_delete(duk_context *ctx) {
         return 1;
     }
 
-    HttpResponse res = NetworkClient::request("DELETE", url, "", headers, timeoutMs);
+    HttpResponse res = KryonHttpClient::request("DELETE", url, "", headers, timeoutMs);
     duk_push_object(ctx);
     duk_push_int(ctx, res.status); duk_put_prop_string(ctx, -2, "status");
     duk_push_string(ctx, res.body.c_str()); duk_put_prop_string(ctx, -2, "body");
@@ -1958,7 +1957,7 @@ duk_ret_t JSBindings::js_net_request(duk_context *ctx) {
         return 1;
     }
 
-    HttpResponse res = NetworkClient::request(method, url, body, headers, timeoutMs);
+    HttpResponse res = KryonHttpClient::request(method, url, body, headers, timeoutMs);
     duk_push_object(ctx);
     duk_push_int(ctx, res.status); duk_put_prop_string(ctx, -2, "status");
     duk_push_string(ctx, res.body.c_str()); duk_put_prop_string(ctx, -2, "body");
@@ -1994,7 +1993,7 @@ duk_ret_t JSBindings::js_net_downloadFile(duk_context *ctx) {
         };
     }
 
-    bool success = NetworkClient::downloadFile(url, destPath, progressCb, timeoutMs);
+    bool success = KryonHttpClient::downloadFile(url, destPath, progressCb, timeoutMs);
     duk_push_boolean(ctx, success);
     return 1;
 }
@@ -3134,8 +3133,8 @@ duk_ret_t JSBindings::js_math_transformVertices(duk_context *ctx) {
         duk_pop(ctx);
     }
     
-    float screenW = (duk_get_top(ctx) >= 3 && !duk_is_undefined(ctx, 2)) ? (float)duk_get_number(ctx, 2) : 240.0f;
-    float screenH = (duk_get_top(ctx) >= 4 && !duk_is_undefined(ctx, 3)) ? (float)duk_get_number(ctx, 3) : 320.0f;
+    float screenW = (duk_get_top(ctx) >= 3 && !duk_is_undefined(ctx, 2)) ? (float)duk_get_number(ctx, 2) : (float)Display::width();
+    float screenH = (duk_get_top(ctx) >= 4 && !duk_is_undefined(ctx, 3)) ? (float)duk_get_number(ctx, 3) : (float)Display::height();
     float scale   = (duk_get_top(ctx) >= 5 && !duk_is_undefined(ctx, 4)) ? (float)duk_get_number(ctx, 4) : 200.0f;
     float distZ   = (duk_get_top(ctx) >= 6 && !duk_is_undefined(ctx, 5)) ? (float)duk_get_number(ctx, 5) : 3.0f;
     

@@ -163,6 +163,7 @@
 <blockquote>
   <p><strong>ESP32-S3 N16R8 Setup:</strong> For wiring schematics, PSRAM configuration, and PlatformIO setup for the default reference board, see the <strong><a href="Documentation/ESP32_S3_N16R8_Guide.md">ESP32-S3 N16R8 Guide</a></strong>.</p>
   <p><strong>Multi-Board Architecture:</strong> For pinout tables and build configurations across all supported boards, see the <strong><a href="Documentation/Hardware_Architecture.md">Hardware Architecture Guide</a></strong>.</p>
+  <p><strong>Display &amp; Touch Drivers:</strong> To add a board with a different panel or touch controller, or to set a custom resolution via build flags, see the <strong><a href="Documentation/Display_Touch_Architecture.md">Display &amp; Touch Driver Architecture</a></strong> guide.</p>
 </blockquote>
 
 <hr>
@@ -317,14 +318,19 @@
 git clone https://github.com/Haris16-code/KryonOS.git
 cd KryonOS
 
-# 2. Build &amp; Upload for Default Board (ESP32-S3 DevKitC-1 N16R8)
-pio run -e esp32-s3-devkitc-1-n16r8 -t upload
+# 2. Build &amp; Upload for the ESP32-S3 default board
+pio run -e esp32s3-default -t upload
 
-# Or compile for other boards:
-pio run -e m5stack-cardputer -t upload   # M5Stack Cardputer
-pio run -e lilygo-t-hmi -t upload        # LilyGO T-HMI
-pio run -e esp32-cyd-28 -t upload        # ESP32 Cheap Yellow Display
-pio run -e esp32doit-devkit-v1 -t upload # ESP32 DevKit v1</pre>
+# Or for the plain-ESP32 default board:
+pio run -e esp32-default -t upload
+
+# Or for the ESP32-S31 default board (preview: Arduino 4.x / ESP-IDF 6.1,
+# excluded from the default environment set until the port is done):
+pio run -e esp32s31-default -t upload
+
+# Display size is a build flag, not a code constant: edit the
+# KRYONOS_DISPLAY_WIDTH / _HEIGHT / _ROTATION lines under the environment
+# in platformio.ini to match your panel, then rebuild.</pre>
 
 <hr>
 <h2>Documentation</h2>

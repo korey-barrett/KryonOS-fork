@@ -1,11 +1,15 @@
-// Default-board implementation for the ESP32-S3 chip type.
+// Default-board implementation for the ESP32-S31 chip type.
 //
 // Board selection is COMPILE-TIME via a positive TARGET_* macro. This file defines the global `tft`
 // symbol and the HAL functions declared in ../Board.h, so it MUST be mutually exclusive with every
 // other board implementation — otherwise the linker sees duplicate symbols. It is therefore keyed
-// on the positive TARGET_ESP32S3_DEFAULT macro rather than an inverse "none of the others" test:
+// on the positive TARGET_ESP32S31_DEFAULT macro rather than an inverse "none of the others" test:
 // an inverse test silently breaks the moment a new TARGET_* board is added and forgotten here.
-#if defined(TARGET_ESP32S3_DEFAULT)
+//
+// The S31 is a RISC-V chip brought up on arduino-esp32 4.x (ESP-IDF 6.1), which is why this
+// environment pins a different pioarduino platform from the ESP32/ESP32-S3 defaults. See
+// Documentation/Display_Touch_Architecture.md §5.
+#if defined(TARGET_ESP32S31_DEFAULT)
 
 #include "../Board.h"
 #include "BoardConfig.h"
@@ -54,23 +58,23 @@ void setRGBLED(uint8_t, uint8_t, uint8_t, bool) {}
 
 // Hardware Lifecycle
 void initHardware(void) {
-    Serial.println("[Board ESP32-S3] Initializing Hardware...");
+    Serial.println("[Board ESP32-S31] Initializing Hardware...");
 #if defined(TFT_BL)
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, HIGH);
 #endif
-    Serial.println("[Board ESP32-S3] Hardware Initialized.");
+    Serial.println("[Board ESP32-S31] Hardware Initialized.");
 }
 
 void initDisplay(void) {
-    Serial.println("[Board ESP32-S3] Initializing Display...");
+    Serial.println("[Board ESP32-S31] Initializing Display...");
     tft.init();
     tft.setRotation(KRYONOS_DISPLAY_ROTATION);
     tft.fillScreen(TFT_BLACK);
 }
 
 void initTouch(void) {
-    Serial.println("[Board ESP32-S3] Initializing TouchDriver...");
+    Serial.println("[Board ESP32-S31] Initializing TouchDriver...");
     TouchDriver::init(&tft);
 }
 
@@ -113,4 +117,4 @@ bool isFnActive(void) { return false; }
 float getBatteryVoltage(void) { return 0.0f; }
 int getBatteryPercent(void) { return 0; }
 
-#endif // TARGET_ESP32S3_DEFAULT
+#endif // TARGET_ESP32S31_DEFAULT

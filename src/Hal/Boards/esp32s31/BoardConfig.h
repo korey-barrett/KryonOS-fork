@@ -1,16 +1,21 @@
-#ifndef ESP32S3_BOARD_CONFIG_H
-#define ESP32S3_BOARD_CONFIG_H
+#ifndef ESP32S31_BOARD_CONFIG_H
+#define ESP32S31_BOARD_CONFIG_H
 
-// Default board profile for the ESP32-S3 chip type.
+// Default board profile for the ESP32-S31 chip type.
 //
 // This is a STARTING POINT, not a specific product: it assumes a generic SPI TFT (ILI9341) and an
 // XPT2046 resistive touch controller. Every value here is an #ifndef default, so the environment's
 // build_flags — or your own board_configs/<name>.ini — always wins. Copy this directory to create a
 // named board; see Documentation/Display_Touch_Architecture.md.
 //
+// NOTE ON PINS: the S31 exposes ~60 GPIOs and its strapping/USB/JTAG assignments differ from the
+// ESP32 and ESP32-S3. The numbers below are placeholders mirroring the S3 default — they are only
+// correct for whatever panel you actually wire up. Set TFT_*/TOUCH_* in the environment's
+// build_flags to match your hardware; do not trust these defaults.
+//
 // Guarded on the same positive macro as BoardConfig.cpp, so header and implementation are always
 // included or excluded together. Never use an inverse ("none of the others") guard here.
-#if defined(TARGET_ESP32S3_DEFAULT)
+#if defined(TARGET_ESP32S31_DEFAULT)
 
 #include <Arduino.h>
 
@@ -50,6 +55,6 @@
 #define TOUCH_IRQ 14
 #endif
 
-#endif // TARGET_ESP32S3_DEFAULT
+#endif // TARGET_ESP32S31_DEFAULT
 
-#endif // ESP32S3_BOARD_CONFIG_H
+#endif // ESP32S31_BOARD_CONFIG_H

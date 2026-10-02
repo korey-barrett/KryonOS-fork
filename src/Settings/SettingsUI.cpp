@@ -14,6 +14,11 @@
 #include "../Kernel/Services/OTA/OTAManager.h"
 #include "../Kernel/Services/Network/TLSHelper.h"
 #include "../Runtime/JSBindings.h"
+#include "../UI/UiLayout.h"
+
+// Current screen metrics. See Documentation/Display_Touch_Architecture.md. This file has a dozen
+// sub-screens that each repeat the same frame/header/footer geometry; M() keeps them consistent.
+static inline const UiMetrics& M() { return UiLayout::current(); }
 
 TFT_eSPI *SettingsUI::tftInstance = nullptr;
 bool SettingsUI::otaErrorShown = false;
@@ -21,6 +26,65 @@ bool showResetDialog = false;
 
 void SettingsUI::init(TFT_eSPI *tft) {
     tftInstance = tft;
+}
+
+// --- shared sub-screen chrome ------------------------------------------------------------------
+// Every Settings sub-screen paints the same three pieces: a rounded frame, a titled header bar, and
+// a footer holding one centred action. They were copy-pasted into each of the dozen screens; drawing
+// them from one place keeps the screens aligned and leaves each one spelling out only what is
+// actually different about it.
+static void drawSettingsBackdrop(TFT_eSPI* t, uint16_t borderColor = TFT_GREEN) {
+    const UiMetrics& m = M();
+    t->fillScreen(TFT_BLACK);
+    t->drawRoundRect(m.frame.x, m.frame.y, m.frame.w, m.frame.h, 5, TFT_WHITE);
+    t->fillRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_BLACK);
+    t->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, borderColor);
+}
+
+static void drawSettingsFrame(TFT_eSPI* t, const char* title,
+                              uint16_t borderColor = TFT_GREEN, uint16_t titleColor = TFT_GREEN) {
+    const UiMetrics& m = M();
+    drawSettingsBackdrop(t, borderColor);
+    t->setTextColor(titleColor, TFT_BLACK);
+    t->setTextDatum(MC_DATUM);
+    t->drawString(title, m.header.cx(), m.headerTextY, m.fontBody);
+}
+
+static void drawSettingsFooter(TFT_eSPI* t, const char* label) {
+    const UiMetrics& m = M();
+    t->drawRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_WHITE);
+    t->setTextColor(TFT_WHITE, TFT_BLACK);
+    t->setTextDatum(MC_DATUM);
+    t->drawString(label, m.footerButtonCenterX(UI_FOOTER_SEL), m.footerTextY, m.fontBody);
+}
+
+// Same footer, but for the screens whose body is a scrollable list: the UP and DN thirds move the
+// selection. Without them a touch-only device could never reach an item that fell off a short panel.
+static void drawSettingsFooterScroll(TFT_eSPI* t, const char* label) {
+    const UiMetrics& m = M();
+    t->drawRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_WHITE);
+    t->setTextColor(TFT_WHITE, TFT_BLACK);
+    t->setTextDatum(MC_DATUM);
+    t->drawString("UP",  m.footerButtonCenterX(UI_FOOTER_UP),  m.footerTextY, m.fontBody);
+    t->drawString(label, m.footerButtonCenterX(UI_FOOTER_SEL), m.footerTextY, m.fontBody);
+    t->drawString("DN",  m.footerButtonCenterX(UI_FOOTER_DN),  m.footerTextY, m.fontBody);
+}
+
+// Scroll the window so `selected` is visible, clamped to the ends of the list. Shared by every
+// Settings screen that shows a list, so UP / DN and the draw agree on what is on screen.
+static int clampScroll(int selected, int scroll, int count, int perPage) {
+    if (perPage < 1) return 0;
+    if (selected < scroll)               scroll = selected;
+    if (selected >= scroll + perPage)    scroll = selected - perPage + 1;
+    if (scroll > count - perPage)        scroll = count - perPage;
+    if (scroll < 0)                      scroll = 0;
+    return scroll;
+}
+
+// Same window bounds, for lists that scroll without a cursor (the saved-network cards): there is no
+// selection to follow, so the window just has to stay inside [0, count - perPage].
+static int clampScrollWindow(int scroll, int count, int perPage) {
+    return clampScroll(scroll, scroll, count, perPage);
 }
 
 String formatBytes(uint64_t bytes) {
@@ -34,97 +98,98 @@ String formatBytes(uint64_t bytes) {
 // MAIN SETTINGS MENU
 // ----------------------------------------------------
 
+// The menu is a table rather than a run of near-identical draw calls, so the entry a tap resolves to
+// and the entry that gets painted come from the same row of data. `state` is the launcher state the
+// entry switches to.
+namespace {
+struct SettingsMenuItem {
+    const char* label;
+    uint16_t    bg;
+    uint16_t    fg;
+    int         state;
+};
+
+const SettingsMenuItem kSettingsMenu[] = {
+    { "WiFi Options",        TFT_BLUE,     TFT_WHITE, 6  }, // STATE_SETTINGS_WIFI
+    { "Touch Calibrator",    TFT_ORANGE,   TFT_WHITE, 4  }, // STATE_CALIBRATOR
+    { "Manage Apps",         TFT_PURPLE,   TFT_WHITE, 8  }, // STATE_SETTINGS_APPS
+    { "Permissions Manager", 0x03E0,       TFT_WHITE, 17 }, // STATE_SETTINGS_PERMISSIONS
+    { "Time & Region",       TFT_CYAN,     TFT_BLACK, 9  }, // STATE_SETTINGS_TIME
+    { "About Device",        TFT_DARKGREY, TFT_WHITE, 7  }, // STATE_SETTINGS_ABOUT
+    { "System Updates",      TFT_RED,      TFT_WHITE, 12 }, // STATE_UPDATER_MANUAL
+};
+const int kSettingsMenuCount = (int)(sizeof(kSettingsMenu) / sizeof(kSettingsMenu[0]));
+
+int settingsMenuSelected = 0;
+int settingsMenuScroll   = 0;
+} // namespace
+
 void SettingsUI::draw() {
     if (!tftInstance) return;
-    
-    tftInstance->fillScreen(TFT_BLACK);
-    
-    // Draw the main border
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    
-    // Header Bar
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Settings Menu", 120, 21, 2);
+    const UiMetrics& m = M();
 
-    int y = 40;
-    
-    // Button 1: WiFi (y: 40..70)
-    tftInstance->fillRoundRect(20, y, 200, 30, 4, TFT_BLUE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
-    tftInstance->drawString("WiFi Options", 120, y + 15, 2);
-    y += 34;
+    drawSettingsFrame(tftInstance, "Settings Menu");
 
-    // Button 2: Touch Calibrator (y: 74..104)
-    tftInstance->fillRoundRect(20, y, 200, 30, 4, TFT_ORANGE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_ORANGE);
-    tftInstance->drawString("Touch Calibrator", 120, y + 15, 2);
-    y += 34;
+    // Seven entries over 30px rows need 210px; they all fit at 240x320, but a short panel shows
+    // fewer and has to scroll. The list grid is the same one Launcher / App Store / Help Center use.
+    const int perPage = m.itemsPerPage;
+    settingsMenuScroll = clampScroll(settingsMenuSelected, settingsMenuScroll,
+                                     kSettingsMenuCount, perPage);
 
-    // Button 3: Manage Apps (y: 108..138)
-    tftInstance->fillRoundRect(20, y, 200, 30, 4, TFT_PURPLE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_PURPLE);
-    tftInstance->drawString("Manage Apps", 120, y + 15, 2);
-    y += 34;
+    for (int i = 0; i < perPage; i++) {
+        const int idx = settingsMenuScroll + i;
+        if (idx >= kSettingsMenuCount) break;
 
-    // Button 4: Permissions Manager (y: 142..172)
-    tftInstance->fillRoundRect(20, y, 200, 30, 4, 0x03E0); // Dark Forest Green
-    tftInstance->setTextColor(TFT_WHITE, 0x03E0);
-    tftInstance->drawString("Permissions Manager", 120, y + 15, 2);
-    y += 34;
+        const UiRect fill = m.listRowFillRect(i);
+        tftInstance->fillRoundRect(fill.x, fill.y, fill.w, fill.h, 4, kSettingsMenu[idx].bg);
+        if (idx == settingsMenuSelected) {
+            // The entries are already colour-coded, so selection reads as a white outline rather
+            // than an inverted fill.
+            tftInstance->drawRoundRect(fill.x, fill.y, fill.w, fill.h, 4, TFT_WHITE);
+        }
+        tftInstance->setTextColor(kSettingsMenu[idx].fg, kSettingsMenu[idx].bg);
+        tftInstance->setTextDatum(MC_DATUM);
+        tftInstance->drawString(kSettingsMenu[idx].label, fill.cx(), m.listRowTextY(i), m.fontBody);
+    }
 
-    // Button 5: Time & Region (y: 176..206)
-    tftInstance->fillRoundRect(20, y, 200, 30, 4, TFT_CYAN);
-    tftInstance->setTextColor(TFT_BLACK, TFT_CYAN);
-    tftInstance->drawString("Time & Region", 120, y + 15, 2);
-    y += 34;
+    if (kSettingsMenuCount > perPage) {
+        const int thumbH = max((int)m.scrollThumbMin, (m.list.h * perPage) / kSettingsMenuCount);
+        const int thumbY = m.list.y + (settingsMenuScroll * (m.list.h - thumbH)) /
+                                         (kSettingsMenuCount - perPage);
+        tftInstance->fillRect(m.scrollX, m.list.y, m.scrollW, m.list.h, TFT_DARKGREY);
+        tftInstance->fillRect(m.scrollX, thumbY, m.scrollW, thumbH, TFT_WHITE);
+    }
 
-    // Button 6: About (y: 210..240)
-    tftInstance->fillRoundRect(20, y, 200, 30, 4, TFT_DARKGREY);
-    tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-    tftInstance->drawString("About Device", 120, y + 15, 2);
-    y += 34;
-    
-    // Button 7: System Updates (y: 244..274)
-    tftInstance->fillRoundRect(20, y, 200, 30, 4, TFT_RED);
-    tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-    tftInstance->drawString("System Updates", 120, y + 15, 2);
-
-    // Touch Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("EXIT", 120, 300, 2);
+    drawSettingsFooterScroll(tftInstance, "EXIT");
 }
 
 void SettingsUI::handleTouch(uint16_t x, uint16_t y) {
     extern int currentState;
+    const UiMetrics& m = M();
 
-    if (x >= 20 && x <= 220) {
-        if (y >= 40 && y <= 70) {
-            currentState = 6; // STATE_SETTINGS_WIFI
-        } else if (y >= 74 && y <= 104) {
-            currentState = 4; // STATE_CALIBRATOR
-        } else if (y >= 108 && y <= 138) {
-            currentState = 8; // STATE_SETTINGS_APPS
-        } else if (y >= 142 && y <= 172) {
-            currentState = 17; // STATE_SETTINGS_PERMISSIONS
-        } else if (y >= 176 && y <= 206) {
-            currentState = 9; // STATE_SETTINGS_TIME
-        } else if (y >= 210 && y <= 240) {
-            currentState = 7; // STATE_SETTINGS_ABOUT
-        } else if (y >= 244 && y <= 274) {
-            currentState = 12; // STATE_UPDATER_MANUAL
+    // A tap activates the entry directly — the highlight exists for the UP / DN keys, not as a
+    // select-then-confirm step.
+    const int rowIndex = m.listRowFromY((int16_t)y);
+    if (rowIndex >= 0 && x >= m.list.x && x < m.list.x + m.list.w) {
+        const int idx = settingsMenuScroll + rowIndex;
+        if (idx < kSettingsMenuCount) {
+            settingsMenuSelected = idx;
+            currentState = kSettingsMenu[idx].state;
+            return;
         }
     }
 
-    // Bottom Nav: EXIT
-    if (y >= 285) {
-        if (x > 60 && x < 180) {
-            currentState = 0; // STATE_LAUNCHER
-        }
+    if (!m.inFooter((int16_t)y)) return;
+    switch (m.footerButtonFromX((int16_t)x)) {
+    case UI_FOOTER_UP:
+        if (settingsMenuSelected > 0) { settingsMenuSelected--; draw(); }
+        break;
+    case UI_FOOTER_DN:
+        if (settingsMenuSelected < kSettingsMenuCount - 1) { settingsMenuSelected++; draw(); }
+        break;
+    default: // UI_FOOTER_SEL — EXIT
+        currentState = 0; // STATE_LAUNCHER
+        break;
     }
 }
 
@@ -132,136 +197,182 @@ void SettingsUI::handleTouch(uint16_t x, uint16_t y) {
 // WIFI OPTIONS MENU
 // ----------------------------------------------------
 
+// ----------------------------------------------------
+// WIFI OPTIONS
+// ----------------------------------------------------
+
+static int wifiActionScroll = 0;
+
+// Line step for a body-text block: one and a half rows, so a card of N lines scales with the panel.
+// Shared by the WiFi status card and the Permissions empty-state card.
+static int16_t bodyLineStep(const UiMetrics& m) { return (int16_t)(m.rowH * 2 / 3); }
+
+namespace {
+int16_t wifiCardH(const UiMetrics& m) { return (int16_t)(3 * bodyLineStep(m) + 18); }
+
+UiRect wifiStatusCard(const UiMetrics& m) {
+    return { m.list.x, (int16_t)(m.header.y + m.header.h + 4), m.list.w, wifiCardH(m) };
+}
+
+// The action buttons fill whatever is left between the card and the footer.
+int16_t wifiActionTop(const UiMetrics& m) {
+    const UiRect card = wifiStatusCard(m);
+    return (int16_t)(card.y + card.h + 6);
+}
+
+int16_t wifiActionH(const UiMetrics& m)     { return (int16_t)(m.rowH + 4); }
+int16_t wifiActionPitch(const UiMetrics& m) { return (int16_t)(wifiActionH(m) + 6); }
+
+int wifiActionsPerPage(const UiMetrics& m) {
+    const int pitch = wifiActionPitch(m);
+    if (pitch <= 0) return 1;
+    const int avail = (m.footer.y - 7) - wifiActionTop(m);
+    const int n = (avail - wifiActionH(m)) / pitch + 1;
+    return (n < 1) ? 1 : n;
+}
+
+UiRect wifiActionButton(const UiMetrics& m, int visibleIndex) {
+    return { (int16_t)(m.list.x + 2),
+             (int16_t)(wifiActionTop(m) + visibleIndex * wifiActionPitch(m)),
+             (int16_t)(m.list.w - 4), wifiActionH(m) };
+}
+} // namespace
+
 void SettingsUI::drawWiFi() {
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    
-    // Header Bar
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("WiFi Options", 120, 21, 2);
+    const UiMetrics& m = M();
+    drawSettingsFrame(tftInstance, "WiFi Options");
 
-    // Live Status Card (y: 40 to 118)
-    tftInstance->fillRoundRect(10, 40, 220, 78, 6, 0x10A2); // Dark navy
-    tftInstance->drawRoundRect(10, 40, 220, 78, 6, TFT_CYAN);
+    const bool enabled   = WiFiManager::isEnabled();
+    const bool connected = WiFiManager::isConnected();
+    const bool online    = WiFiManager::hasInternet();
 
-    bool enabled = WiFiManager::isEnabled();
-    bool connected = WiFiManager::isConnected();
-    bool online = WiFiManager::hasInternet();
+    // Live status card
+    const UiRect card  = wifiStatusCard(m);
+    const int16_t step = bodyLineStep(m);
+    tftInstance->fillRoundRect(card.x, card.y, card.w, card.h, 6, 0x10A2); // Dark navy
+    tftInstance->drawRoundRect(card.x, card.y, card.w, card.h, 6, TFT_CYAN);
+
+    const int16_t textX  = (int16_t)(card.x + 8);
+    const int16_t line1Y = (int16_t)(card.y + 8);
+    const int16_t line2Y = (int16_t)(line1Y + step);
+    const int16_t line3Y = (int16_t)(line2Y + step);
 
     tftInstance->setTextDatum(TL_DATUM);
     if (!enabled) {
         tftInstance->setTextColor(TFT_DARKGREY, 0x10A2);
-        tftInstance->drawString("Status: DISABLED", 18, 48, 2);
-        tftInstance->drawString("WiFi radio is turned off", 18, 68, 2);
-        tftInstance->drawString("to conserve battery/RAM.", 18, 88, 2);
+        tftInstance->drawString("Status: DISABLED", textX, line1Y, m.fontBody);
+        tftInstance->drawString("WiFi radio is turned off", textX, line2Y, m.fontBody);
+        tftInstance->drawString("to conserve battery/RAM.", textX, line3Y, m.fontBody);
     } else if (!connected) {
         tftInstance->setTextColor(TFT_RED, 0x10A2);
-        tftInstance->drawString("Status: DISCONNECTED", 18, 48, 2);
+        tftInstance->drawString("Status: DISCONNECTED", textX, line1Y, m.fontBody);
         tftInstance->setTextColor(TFT_WHITE, 0x10A2);
-        tftInstance->drawString("No network connected", 18, 70, 2);
-        tftInstance->drawString("Scan to find networks", 18, 90, 2);
+        tftInstance->drawString("No network connected", textX, line2Y, m.fontBody);
+        tftInstance->drawString("Scan to find networks", textX, line3Y, m.fontBody);
     } else {
-        // Connected!
         tftInstance->setTextColor(online ? TFT_GREEN : TFT_ORANGE, 0x10A2);
-        String statusText = online ? "Status: ONLINE" : "Status: LOCAL ONLY";
-        tftInstance->drawString(statusText, 18, 46, 2);
+        tftInstance->drawString(online ? "Status: ONLINE" : "Status: LOCAL ONLY", textX, line1Y, m.fontBody);
 
-        // Signal bars icon (upper right of card)
-        int bars = WiFiManager::getSignalBars();
-        int sx = 195, sy = 62;
+        // Signal bars, pinned to the right edge of the card
+        const int bars = WiFiManager::getSignalBars();
+        const int sx = (int)(card.right() - 35);
+        const int sy = (int)(card.y + 22);
         for (int b = 1; b <= 4; b++) {
-            uint16_t bColor = (b <= bars) ? (online ? TFT_GREEN : TFT_ORANGE) : TFT_DARKGREY;
+            const uint16_t bColor = (b <= bars) ? (online ? TFT_GREEN : TFT_ORANGE) : TFT_DARKGREY;
             tftInstance->fillRect(sx + (b - 1) * 6, sy - (b * 3), 4, b * 3, bColor);
         }
 
         tftInstance->setTextColor(TFT_WHITE, 0x10A2);
         String ssid = WiFiManager::getSSID();
         if (ssid.length() > 16) ssid = ssid.substring(0, 14) + "..";
-        tftInstance->drawString("SSID: " + ssid, 18, 66, 2);
-        tftInstance->drawString("IP:   " + WiFiManager::getIP(), 18, 86, 2);
+        tftInstance->drawString("SSID: " + ssid, textX, line2Y, m.fontBody);
+        tftInstance->drawString("IP:   " + WiFiManager::getIP(), textX, line3Y, m.fontBody);
     }
 
-    // Button 1: WiFi ON/OFF Toggle (y: 124, h: 34)
-    tftInstance->fillRoundRect(12, 124, 216, 34, 5, enabled ? TFT_BLUE : TFT_DARKGREY);
-    tftInstance->setTextColor(TFT_WHITE, enabled ? TFT_BLUE : TFT_DARKGREY);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString(enabled ? "WiFi: ON (Tap to Disable)" : "WiFi: OFF (Tap to Enable)", 120, 141, 2);
-
+    // The toggle is always available; the other three actions only exist while the radio is on.
+    struct WifiAction { String label; uint16_t bg; };
+    WifiAction actions[4];
+    int actionCount = 0;
+    actions[actionCount++] = { enabled ? String("WiFi: ON (Tap to Disable)")
+                                       : String("WiFi: OFF (Tap to Enable)"),
+                               (uint16_t)(enabled ? TFT_BLUE : TFT_DARKGREY) };
     if (enabled) {
-        // Button 2: Scan Nearby Networks (y: 164, h: 34)
-        tftInstance->fillRoundRect(12, 164, 216, 34, 5, TFT_PURPLE);
-        tftInstance->setTextColor(TFT_WHITE, TFT_PURPLE);
-        tftInstance->drawString("Scan Nearby Networks", 120, 181, 2);
-
-        // Button 3: Saved Networks (y: 204, h: 34)
-        int savedCount = (int)WiFiManager::getSavedNetworks().size();
-        tftInstance->fillRoundRect(12, 204, 216, 34, 5, 0x03E0 /* Forest Green */);
-        tftInstance->setTextColor(TFT_WHITE, 0x03E0);
-        tftInstance->drawString("Saved Networks (" + String(savedCount) + ")", 120, 221, 2);
-
-        // Button 4: Start Web Server (y: 244, h: 34)
-        tftInstance->fillRoundRect(12, 244, 216, 34, 5, TFT_ORANGE);
-        tftInstance->setTextColor(TFT_WHITE, TFT_ORANGE);
-        tftInstance->drawString("Web Server", 120, 261, 2);
+        actions[actionCount++] = { String("Scan Nearby Networks"), (uint16_t)TFT_PURPLE };
+        actions[actionCount++] = { "Saved Networks (" + String((int)WiFiManager::getSavedNetworks().size()) + ")",
+                                   (uint16_t)0x03E0 /* Forest Green */ };
+        actions[actionCount++] = { String("Web Server"), (uint16_t)TFT_ORANGE };
     }
 
-    // Touch Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 120, 300, 2);
+    const int perPage = wifiActionsPerPage(m);
+    wifiActionScroll = clampScrollWindow(wifiActionScroll, actionCount, perPage);
+
+    for (int i = 0; i < perPage; i++) {
+        const int idx = wifiActionScroll + i;
+        if (idx >= actionCount) break;
+        const UiRect btn = wifiActionButton(m, i);
+        tftInstance->fillRoundRect(btn.x, btn.y, btn.w, btn.h, 5, actions[idx].bg);
+        tftInstance->setTextColor(TFT_WHITE, actions[idx].bg);
+        tftInstance->setTextDatum(MC_DATUM);
+        tftInstance->drawString(actions[idx].label, btn.cx(), btn.cy(), m.fontBody);
+    }
+
+    if (actionCount > perPage) {
+        const int thumbH = max((int)m.scrollThumbMin, (m.list.h * perPage) / actionCount);
+        const int thumbY = m.list.y + (wifiActionScroll * (m.list.h - thumbH)) / (actionCount - perPage);
+        tftInstance->fillRect(m.scrollX, m.list.y, m.scrollW, m.list.h, TFT_DARKGREY);
+        tftInstance->fillRect(m.scrollX, thumbY, m.scrollW, thumbH, TFT_WHITE);
+    }
+
+    if (actionCount > perPage) drawSettingsFooterScroll(tftInstance, "BACK");
+    else                       drawSettingsFooter(tftInstance, "BACK");
 }
 
 void SettingsUI::handleWiFiTouch(uint16_t x, uint16_t y) {
     extern int currentState;
+    const UiMetrics& m = M();
 
-    // WiFi Toggle Button (y: 124 to 158)
-    if (x >= 12 && x <= 228 && y >= 124 && y <= 158) {
-        bool enabled = WiFiManager::isEnabled();
-        WiFiManager::setEnabled(!enabled);
+    const bool enabled = WiFiManager::isEnabled();
+    const int  actionCount = enabled ? 4 : 1;
+    const int  perPage = wifiActionsPerPage(m);
 
-        if (!enabled) {
-            // Turning ON -> if no saved networks, scan immediately
-            if (WiFiManager::getSavedNetworks().empty()) {
-                scanAndConnectWiFi();
-                return;
-            } else {
+    // Walk the same rects drawWiFi() laid out — only the visible buttons can be hit.
+    for (int i = 0; i < perPage; i++) {
+        const int idx = wifiActionScroll + i;
+        if (idx >= actionCount) break;
+        const UiRect btn = wifiActionButton(m, i);
+        if (!btn.contains((int16_t)x, (int16_t)y)) continue;
+
+        if (idx == 0) {
+            // WiFi ON/OFF toggle
+            WiFiManager::setEnabled(!enabled);
+            if (!enabled) {
+                // Turning ON -> if there are no saved networks, scan immediately
+                if (WiFiManager::getSavedNetworks().empty()) {
+                    scanAndConnectWiFi();
+                    return;
+                }
                 WiFiManager::smartAutoConnect();
             }
+            drawWiFi();
+            return;
         }
-        drawWiFi();
+        if (idx == 1) { scanAndConnectWiFi(); return; }
+        if (idx == 2) { currentState = 15; /* STATE_SETTINGS_WIFI_SAVED */ drawSavedNetworks(); return; }
+        currentState = 5; // STATE_WEB_APP
         return;
     }
 
-    if (WiFiManager::isEnabled()) {
-        // Scan Networks Button (y: 164 to 198)
-        if (x >= 12 && x <= 228 && y >= 164 && y <= 198) {
-            scanAndConnectWiFi();
-            return;
-        }
-
-        // Saved Networks Button (y: 204 to 238)
-        if (x >= 12 && x <= 228 && y >= 204 && y <= 238) {
-            currentState = 15; // STATE_SETTINGS_WIFI_SAVED
-            drawSavedNetworks();
-            return;
-        }
-
-        // Web Server Button (y: 244 to 278)
-        if (x >= 12 && x <= 228 && y >= 244 && y <= 278) {
-            currentState = 5; // STATE_WEB_APP
-            return;
-        }
-    }
-
-    // Bottom Nav: BACK
-    if (y >= 285) {
-        if (x > 60 && x < 180) {
-            currentState = 1; // STATE_SETTINGS
-        }
+    if (!m.inFooter((int16_t)y)) return;
+    switch (m.footerButtonFromX((int16_t)x)) {
+    case UI_FOOTER_UP:
+        if (wifiActionScroll > 0) { wifiActionScroll--; drawWiFi(); }
+        break;
+    case UI_FOOTER_DN:
+        if (wifiActionScroll < actionCount - perPage) { wifiActionScroll++; drawWiFi(); }
+        break;
+    default: // UI_FOOTER_SEL — BACK
+        currentState = 1; // STATE_SETTINGS
+        break;
     }
 }
 
@@ -271,128 +382,159 @@ void SettingsUI::handleWiFiTouch(uint16_t x, uint16_t y) {
 
 static int savedNetScroll = 0;
 
-void SettingsUI::drawSavedNetworks() {
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    
-    // Header Bar
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Saved Networks", 120, 21, 2);
+// The saved-network list is a stack of cards rather than single-line rows: each card carries the
+// SSID, a status badge and a Forget button. Card height is derived from the row height so the list
+// still degrades sensibly on a short panel.
+namespace {
+int16_t savedCardH(const UiMetrics& m) { return (int16_t)(m.rowH + 22); }
+int16_t savedCardPitch(const UiMetrics& m) { return (int16_t)(savedCardH(m) + 6); }
 
+int16_t savedCardY(const UiMetrics& m, int visibleIndex) {
+    return (int16_t)(m.list.y + visibleIndex * savedCardPitch(m));
+}
+
+// As many cards as fit: the last one needs (n-1) pitches plus its own height, not n pitches.
+int savedCardsPerPage(const UiMetrics& m) {
+    const int pitch = savedCardPitch(m);
+    if (pitch <= 0) return 1;
+    const int n = (m.list.h - savedCardH(m)) / pitch + 1;
+    return (n < 1) ? 1 : n;
+}
+
+UiRect savedForgetButton(const UiMetrics& m, int16_t cardY) {
+    return { (int16_t)(m.list.x + m.list.w - 75), (int16_t)(cardY + 10), 65, 32 };
+}
+} // namespace
+
+void SettingsUI::drawSavedNetworks() {
+    const UiMetrics& m = M();
     auto saved = WiFiManager::getSavedNetworks();
-    if (saved.empty()) {
+    const int count = (int)saved.size();
+
+    drawSettingsFrame(tftInstance, "Saved Networks");
+
+    const int perPage = savedCardsPerPage(m);
+    if (count == 0) {
         tftInstance->setTextColor(TFT_DARKGREY, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("No saved networks.", 120, 140, 2);
-        tftInstance->drawString("Scan and connect to add!", 120, 165, 2);
+        const int16_t line1 = (int16_t)(m.list.y + m.list.h / 2 - 12);
+        tftInstance->drawString("No saved networks.", m.centerX, line1, m.fontBody);
+        tftInstance->drawString("Scan and connect to add!", m.centerX, (int16_t)(line1 + 25), m.fontBody);
     } else {
-        int itemsPerPage = 4;
-        int yPos = 42;
+        savedNetScroll = clampScrollWindow(savedNetScroll, count, perPage);
         String curSSID = WiFiManager::getSSID();
+        const int16_t cardH = savedCardH(m);
 
-        for (int i = 0; i < itemsPerPage; i++) {
-            int idx = savedNetScroll + i;
-            if (idx >= (int)saved.size()) break;
+        for (int i = 0; i < perPage; i++) {
+            const int idx = savedNetScroll + i;
+            if (idx >= count) break;
 
             const auto& net = saved[idx];
             bool isCurrent = WiFiManager::isConnected() && net.ssid.equalsIgnoreCase(curSSID);
+            const int16_t cardY = savedCardY(m, i);
+            const uint16_t cardBg = isCurrent ? 0x02E0 : 0x18C3;
 
-            // Card background
-            tftInstance->fillRoundRect(10, yPos, 220, 52, 5, isCurrent ? 0x02E0 : 0x18C3);
-            tftInstance->drawRoundRect(10, yPos, 220, 52, 5, isCurrent ? TFT_GREEN : TFT_WHITE);
+            tftInstance->fillRoundRect(m.list.x, cardY, m.list.w, cardH, 5, cardBg);
+            tftInstance->drawRoundRect(m.list.x, cardY, m.list.w, cardH, 5,
+                                       isCurrent ? TFT_GREEN : TFT_WHITE);
 
-            // SSID text
             tftInstance->setTextDatum(TL_DATUM);
-            tftInstance->setTextColor(TFT_WHITE, isCurrent ? 0x02E0 : 0x18C3);
+            tftInstance->setTextColor(TFT_WHITE, cardBg);
             String displaySSID = net.ssid;
             if (displaySSID.length() > 14) displaySSID = displaySSID.substring(0, 12) + "..";
-            tftInstance->drawString(displaySSID, 18, yPos + 8, 2);
+            tftInstance->drawString(displaySSID, (int16_t)(m.list.x + 8), (int16_t)(cardY + 8), m.fontBody);
 
-            // Active or Connect badge
             if (isCurrent) {
-                tftInstance->setTextColor(TFT_GREEN, 0x02E0);
-                tftInstance->drawString("Connected", 18, yPos + 30, 2);
+                tftInstance->setTextColor(TFT_GREEN, cardBg);
+                tftInstance->drawString("Connected", (int16_t)(m.list.x + 8), (int16_t)(cardY + 30), m.fontBody);
             } else {
-                tftInstance->setTextColor(TFT_CYAN, 0x18C3);
-                tftInstance->drawString("Tap to Connect", 18, yPos + 30, 2);
+                tftInstance->setTextColor(TFT_CYAN, cardBg);
+                tftInstance->drawString("Tap to Connect", (int16_t)(m.list.x + 8), (int16_t)(cardY + 30), m.fontBody);
             }
 
-            // Forget Button
-            tftInstance->fillRoundRect(155, yPos + 10, 65, 32, 4, TFT_RED);
+            const UiRect forget = savedForgetButton(m, cardY);
+            tftInstance->fillRoundRect(forget.x, forget.y, forget.w, forget.h, 4, TFT_RED);
             tftInstance->setTextColor(TFT_WHITE, TFT_RED);
             tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString("Forget", 187, yPos + 26, 2);
+            tftInstance->drawString("Forget", forget.cx(), forget.cy(), m.fontBody);
+        }
 
-            yPos += 58;
+        if (count > perPage) {
+            const int thumbH = max((int)m.scrollThumbMin, (m.list.h * perPage) / count);
+            const int thumbY = m.list.y + (savedNetScroll * (m.list.h - thumbH)) / (count - perPage);
+            tftInstance->fillRect(m.scrollX, m.list.y, m.scrollW, m.list.h, TFT_DARKGREY);
+            tftInstance->fillRect(m.scrollX, thumbY, m.scrollW, thumbH, TFT_WHITE);
         }
     }
 
-    // Touch Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 120, 300, 2);
+    // UP / DN only appear when there is actually something off-screen to scroll to.
+    if (count > perPage) drawSettingsFooterScroll(tftInstance, "BACK");
+    else                 drawSettingsFooter(tftInstance, "BACK");
 }
 
 void SettingsUI::handleSavedNetworksTouch(uint16_t x, uint16_t y) {
     extern int currentState;
+    const UiMetrics& m = M();
     auto saved = WiFiManager::getSavedNetworks();
+    const int count = (int)saved.size();
+    const int perPage = savedCardsPerPage(m);
 
-    if (!saved.empty()) {
-        int itemsPerPage = 4;
-        int checkY = 42;
+    for (int i = 0; i < perPage && count > 0; i++) {
+        const int idx = savedNetScroll + i;
+        if (idx >= count) break;
 
-        for (int i = 0; i < itemsPerPage; i++) {
-            int idx = savedNetScroll + i;
-            if (idx >= (int)saved.size()) break;
+        const int16_t cardY = savedCardY(m, i);
+        const UiRect forget = savedForgetButton(m, cardY);
 
-            // Check if Forget button was tapped (x: 155 to 220)
-            if (x >= 155 && x <= 220 && y >= checkY + 10 && y <= checkY + 42) {
-                String toForget = saved[idx].ssid;
-                WiFiManager::forgetNetwork(toForget);
+        // Forget button (checked before the card body, which it sits on top of)
+        if (forget.contains((int16_t)x, (int16_t)y)) {
+            String toForget = saved[idx].ssid;
+            WiFiManager::forgetNetwork(toForget);
+            if (savedNetScroll >= count - 1) savedNetScroll = max(0, savedNetScroll - 1);
 
-                tftInstance->fillScreen(TFT_BLACK);
-                tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-                tftInstance->setTextDatum(MC_DATUM);
-                tftInstance->drawString("Network Forgot!", 120, 160, 2);
-                delay(800);
-                drawSavedNetworks();
-                return;
-            }
+            tftInstance->fillScreen(TFT_BLACK);
+            tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
+            tftInstance->setTextDatum(MC_DATUM);
+            tftInstance->drawString("Network Forgot!", m.centerX, m.centerY, m.fontBody);
+            delay(800);
+            drawSavedNetworks();
+            return;
+        }
 
-            // Check if card body was tapped to connect (x: 10 to 150)
-            if (x >= 10 && x <= 150 && y >= checkY && y <= checkY + 52) {
-                String toConnect = saved[idx].ssid;
-                String pass = saved[idx].password;
+        // Card body (excluding the Forget button) connects.
+        const UiRect body = { m.list.x, cardY, (int16_t)(forget.x - m.list.x), savedCardH(m) };
+        if (body.contains((int16_t)x, (int16_t)y)) {
+            String toConnect = saved[idx].ssid;
+            String pass = saved[idx].password;
 
-                tftInstance->fillScreen(TFT_BLACK);
-                tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-                tftInstance->setTextDatum(MC_DATUM);
-                tftInstance->drawString("Connecting to", 120, 140, 2);
-                tftInstance->drawString(toConnect + "...", 120, 165, 2);
+            tftInstance->fillScreen(TFT_BLACK);
+            tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
+            tftInstance->setTextDatum(MC_DATUM);
+            tftInstance->drawString("Connecting to", m.centerX, (int16_t)(m.list.y + m.list.h / 2 - 12), m.fontBody);
+            tftInstance->drawString(toConnect + "...", m.centerX, (int16_t)(m.list.y + m.list.h / 2 + 13), m.fontBody);
 
-                bool success = WiFiManager::connectTo(toConnect, pass, 10000);
-                tftInstance->fillScreen(TFT_BLACK);
-                tftInstance->setTextColor(success ? TFT_GREEN : TFT_RED, TFT_BLACK);
-                tftInstance->drawString(success ? "Connected!" : "Connection Failed", 120, 160, 2);
-                delay(1000);
-                drawSavedNetworks();
-                return;
-            }
-
-            checkY += 58;
+            bool success = WiFiManager::connectTo(toConnect, pass, 10000);
+            tftInstance->fillScreen(TFT_BLACK);
+            tftInstance->setTextColor(success ? TFT_GREEN : TFT_RED, TFT_BLACK);
+            tftInstance->drawString(success ? "Connected!" : "Connection Failed", m.centerX, m.centerY, m.fontBody);
+            delay(1000);
+            drawSavedNetworks();
+            return;
         }
     }
 
-    // Bottom Nav: BACK
-    if (y >= 285) {
-        if (x > 60 && x < 180) {
-            currentState = 6; // STATE_SETTINGS_WIFI
-            drawWiFi();
-        }
+    if (!m.inFooter((int16_t)y)) return;
+    switch (m.footerButtonFromX((int16_t)x)) {
+    case UI_FOOTER_UP:
+        if (savedNetScroll > 0) { savedNetScroll--; drawSavedNetworks(); }
+        break;
+    case UI_FOOTER_DN:
+        if (savedNetScroll < count - perPage) { savedNetScroll++; drawSavedNetworks(); }
+        break;
+    default: // UI_FOOTER_SEL — BACK
+        currentState = 6; // STATE_SETTINGS_WIFI
+        drawWiFi();
+        break;
     }
 }
 
@@ -514,50 +656,74 @@ static void drawMiniSparkle(TFT_eSPI *tft, int cx, int cy, uint16_t color) {
     tft->drawPixel(cx, cy, TFT_WHITE);
 }
 
+namespace {
+// About Device is two stacked cards: hardware/storage, then community. The first is sized by its
+// four rows; the second fills whatever is left above the Reset button.
+int16_t aboutCard1H(const UiMetrics& m) { return (int16_t)(6 + 4 * bodyLineStep(m) + 6); }
+
+UiRect aboutCard1(const UiMetrics& m) {
+    return { m.list.x, m.header.bottom(), m.list.w, aboutCard1H(m) };
+}
+
+UiRect aboutResetButton(const UiMetrics& m) {
+    const int16_t w = (int16_t)min((int)160, (int)(m.list.w - 60));
+    return { (int16_t)(m.centerX - w / 2), (int16_t)(m.footer.y - 37), w, 28 };
+}
+
+UiRect aboutCard2(const UiMetrics& m) {
+    const UiRect c1 = aboutCard1(m);
+    const int16_t bottom = (int16_t)(aboutResetButton(m).y - 8);
+    int16_t h = (int16_t)(bottom - (c1.bottom() + 6));
+    if (h < 1) h = 1;
+    return { m.list.x, (int16_t)(c1.bottom() + 6), m.list.w, h };
+}
+} // namespace
+
 void SettingsUI::drawAboutLoading(int percent, const String& statusText) {
     if (!tftInstance) return;
 
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-
-    // Header Bar
-    tftInstance->fillRoundRect(6, 6, 228, 28, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 28, 5, TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("About Device", 120, 20, 2);
+    const UiMetrics& m = M();
+    drawSettingsFrame(tftInstance, "About Device");
 
     // Loading Card
-    tftInstance->fillRoundRect(10, 85, 220, 130, 6, 0x10A2); // Dark cyber navy
-    tftInstance->drawRoundRect(10, 85, 220, 130, 6, TFT_CYAN);
+    const UiRect card = { m.list.x, (int16_t)(m.list.y + 40), m.list.w, (int16_t)(m.list.h - 100) };
+    tftInstance->fillRoundRect(card.x, card.y, card.w, card.h, 6, 0x10A2); // Dark cyber navy
+    tftInstance->drawRoundRect(card.x, card.y, card.w, card.h, 6, TFT_CYAN);
 
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->setTextColor(TFT_WHITE, 0x10A2);
-    tftInstance->drawString("Loading System Info...", 120, 110, 2);
+    tftInstance->drawString("Loading System Info...", card.cx(), (int16_t)(card.y + card.h / 5),
+                            m.fontBody);
 
-    // Progress Bar Outline
-    int barX = 24;
-    int barY = 138;
-    int barW = 192;
-    int barH = 16;
+    // Progress Bar Outline — inset 14px from each side of the card
+    const int16_t barX = (int16_t)(card.x + 14);
+    const int16_t barY = (int16_t)(card.y + card.h * 2 / 5);
+    const int16_t barW = (int16_t)(card.w - 28);
+    const int16_t barH = 16;
     tftInstance->drawRoundRect(barX, barY, barW, barH, 4, TFT_WHITE);
-    tftInstance->fillRect(barX + 2, barY + 2, barW - 4, barH - 4, TFT_BLACK);
+    tftInstance->fillRect((int16_t)(barX + 2), (int16_t)(barY + 2),
+                          (int16_t)(barW - 4), (int16_t)(barH - 4), TFT_BLACK);
 
     // Filled Bar
-    int fillW = (percent * (barW - 4)) / 100;
+    const int16_t fillW = (int16_t)((percent * (barW - 4)) / 100);
     if (fillW > 0) {
-        tftInstance->fillRect(barX + 2, barY + 2, fillW, barH - 4, TFT_GREEN);
+        tftInstance->fillRect((int16_t)(barX + 2), (int16_t)(barY + 2), fillW,
+                              (int16_t)(barH - 4), TFT_GREEN);
     }
 
     tftInstance->setTextColor(TFT_YELLOW, 0x10A2);
-    tftInstance->drawString(statusText.c_str(), 120, 175, 2);
+    tftInstance->drawString(statusText.c_str(), card.cx(), (int16_t)(card.y + card.h * 7 / 10),
+                            m.fontBody);
 
     tftInstance->setTextColor(TFT_DARKGREY, 0x10A2);
-    tftInstance->drawString(String(percent) + "%", 120, 196, 2);
+    tftInstance->drawString(String(percent) + "%", card.cx(), (int16_t)(card.y + card.h * 17 / 20),
+                            m.fontBody);
 }
 
 void SettingsUI::drawAbout() {
     if (!tftInstance) return;
+
+    const UiMetrics& m = M();
 
     // Show initial loading stage
     drawAboutLoading(25, "Reading Hardware & Storage...");
@@ -573,15 +739,7 @@ void SettingsUI::drawAbout() {
         drawAboutLoading(95, "Finalizing System Info...");
     }
 
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-
-    // Header Bar
-    tftInstance->fillRoundRect(6, 6, 228, 28, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 28, 5, TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("About Device", 120, 20, 2);
+    drawSettingsFrame(tftInstance, "About Device");
 
     // Get Storage Info
     uint64_t fsTotal = LittleFS.totalBytes();
@@ -592,27 +750,38 @@ void SettingsUI::drawAbout() {
     uint64_t sdUsed = FileSystem::isSDMounted() ? SD.usedBytes() : 0;
     uint64_t sdFree = sdTotal - sdUsed;
 
+    const int16_t step = bodyLineStep(m);
+
     // 1. Hardware & System Card
-    tftInstance->fillRoundRect(10, 36, 220, 92, 6, 0x10A2); // Dark cyber navy
-    tftInstance->drawRoundRect(10, 36, 220, 92, 6, 0x2945);
+    const UiRect c1 = aboutCard1(m);
+    tftInstance->fillRoundRect(c1.x, c1.y, c1.w, c1.h, 6, 0x10A2); // Dark cyber navy
+    tftInstance->drawRoundRect(c1.x, c1.y, c1.w, c1.h, 6, 0x2945);
+
+    const int16_t c1LabelX = (int16_t)(c1.x + 8);
+    int16_t rowY = (int16_t)(c1.y + 6);
 
     tftInstance->setTextDatum(TL_DATUM);
     tftInstance->setTextColor(TFT_GREEN, 0x10A2);
-    tftInstance->drawString(String("KryonOS v") + KRYONOS_VERSION, 18, 42, 2);
+    tftInstance->drawString(String("KryonOS v") + KRYONOS_VERSION, c1LabelX, rowY, m.fontBody);
 
+    rowY += step;
     tftInstance->setTextColor(TFT_CYAN, 0x10A2);
-    tftInstance->drawString("Flash:", 18, 62, 2);
+    tftInstance->drawString("Flash:", c1LabelX, rowY, m.fontBody);
     tftInstance->setTextColor(TFT_WHITE, 0x10A2);
-    tftInstance->drawString(formatBytes(fsTotal) + " (" + formatBytes(fsFree) + " free)", 62, 62, 2);
+    tftInstance->drawString(formatBytes(fsTotal) + " (" + formatBytes(fsFree) + " free)",
+                            (int16_t)(c1.x + 52), rowY, m.fontBody);
 
+    rowY += step;
     tftInstance->setTextColor(TFT_ORANGE, 0x10A2);
-    tftInstance->drawString("SD:", 18, 82, 2);
+    tftInstance->drawString("SD:", c1LabelX, rowY, m.fontBody);
     tftInstance->setTextColor(sdTotal > 0 ? TFT_WHITE : TFT_RED, 0x10A2);
-    String sdStr = (sdTotal > 0) ? (formatBytes(sdTotal) + " (" + formatBytes(sdFree) + " free)") : "Not mounted";
-    tftInstance->drawString(sdStr, 46, 82, 2);
+    String sdStr = (sdTotal > 0) ? (formatBytes(sdTotal) + " (" + formatBytes(sdFree) + " free)")
+                                 : "Not mounted";
+    tftInstance->drawString(sdStr, (int16_t)(c1.x + 36), rowY, m.fontBody);
 
+    rowY += step;
     tftInstance->setTextColor(TFT_MAGENTA, 0x10A2);
-    tftInstance->drawString("RAM:", 18, 102, 2);
+    tftInstance->drawString("RAM:", c1LabelX, rowY, m.fontBody);
     tftInstance->setTextColor(TFT_WHITE, 0x10A2);
     String ramStr = String(ESP.getFreeHeap() / 1024) + " KB";
 #if defined(BOARD_HAS_PSRAM)
@@ -620,103 +789,122 @@ void SettingsUI::drawAbout() {
         ramStr += " | PS: " + formatBytes(ESP.getFreePsram());
     }
 #endif
-    tftInstance->drawString(ramStr, 58, 102, 2);
+    tftInstance->drawString(ramStr, (int16_t)(c1.x + 48), rowY, m.fontBody);
 
     // 2. Community & Project Card
-    tftInstance->fillRoundRect(10, 134, 220, 106, 6, 0x10A2);
-    tftInstance->drawRoundRect(10, 134, 220, 106, 6, 0x05BF);
+    const UiRect c2 = aboutCard2(m);
+    tftInstance->fillRoundRect(c2.x, c2.y, c2.w, c2.h, 6, 0x10A2);
+    tftInstance->drawRoundRect(c2.x, c2.y, c2.w, c2.h, 6, 0x05BF);
+
+    const int16_t iconX = (int16_t)(c2.x + 12);
+    const int16_t c2LabelX = (int16_t)(c2.x + 22);
+    const int16_t c2RowPitch = (int16_t)(step + 2);
+    int16_t c2Row = (int16_t)(c2.y + 6);
 
     tftInstance->setTextColor(TFT_CYAN, 0x10A2);
-    tftInstance->drawString("Community & Project", 18, 140, 2);
+    tftInstance->drawString("Community & Project", c2LabelX, c2Row, m.fontBody);
 
     // Row 1: GitHub Stars
-    drawMiniStar(tftInstance, 22, 170, TFT_YELLOW);
+    c2Row += c2RowPitch;
+    drawMiniStar(tftInstance, iconX, (int16_t)(c2Row + 8), TFT_YELLOW);
     tftInstance->setTextColor(TFT_YELLOW, 0x10A2);
-    tftInstance->drawString("Stars:", 32, 162, 2);
+    tftInstance->drawString("Stars:", c2LabelX, c2Row, m.fontBody);
     int starsCount = loadCachedStars();
     int roundedTier = (starsCount / 5) * 5;
-    String starsStr = s_lastFetchLive ? (String(starsCount) + " (Live)") : (String(roundedTier) + "+ stars");
+    String starsStr = s_lastFetchLive ? (String(starsCount) + " (Live)")
+                                      : (String(roundedTier) + "+ stars");
     tftInstance->setTextColor(s_lastFetchLive ? TFT_GREEN : 0xFEA0, 0x10A2);
-    tftInstance->drawString(starsStr, 80, 162, 2);
+    tftInstance->drawString(starsStr, (int16_t)(c2.x + 70), c2Row, m.fontBody);
 
     // Row 2: Community URL
-    drawMiniHeart(tftInstance, 22, 192, 0xF81F);
+    c2Row += c2RowPitch;
+    drawMiniHeart(tftInstance, iconX, (int16_t)(c2Row + 8), 0xF81F);
     tftInstance->setTextColor(0xF81F, 0x10A2);
-    tftInstance->drawString("Repo:", 32, 184, 2);
+    tftInstance->drawString("Repo:", c2LabelX, c2Row, m.fontBody);
     tftInstance->setTextColor(TFT_WHITE, 0x10A2);
-    tftInstance->drawString("Haris16-code/KryonOS", 74, 184, 2);
+    tftInstance->drawString("Haris16-code/KryonOS", (int16_t)(c2.x + 64), c2Row, m.fontBody);
 
     // Row 3: Author
-    drawMiniSparkle(tftInstance, 22, 214, TFT_CYAN);
+    c2Row += c2RowPitch;
+    drawMiniSparkle(tftInstance, iconX, (int16_t)(c2Row + 8), TFT_CYAN);
     tftInstance->setTextColor(TFT_CYAN, 0x10A2);
-    tftInstance->drawString("Author:", 32, 206, 2);
+    tftInstance->drawString("Author:", c2LabelX, c2Row, m.fontBody);
     tftInstance->setTextColor(TFT_WHITE, 0x10A2);
-    tftInstance->drawString("Haris (@Haris16-code)", 84, 206, 2);
+    tftInstance->drawString("Haris (@Haris16-code)", (int16_t)(c2.x + 74), c2Row, m.fontBody);
 
     // Reset Apps Button
-    tftInstance->fillRoundRect(40, 248, 160, 28, 4, TFT_RED);
+    const UiRect reset = aboutResetButton(m);
+    tftInstance->fillRoundRect(reset.x, reset.y, reset.w, reset.h, 4, TFT_RED);
     tftInstance->setTextColor(TFT_WHITE, TFT_RED);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Reset App Data", 120, 262, 2);
+    tftInstance->drawString("Reset App Data", reset.cx(), reset.cy(), m.fontBody);
 
     extern bool showResetDialog;
     if (showResetDialog) {
-        tftInstance->fillRoundRect(10, 80, 220, 160, 8, TFT_DARKGREY);
-        tftInstance->drawRoundRect(10, 80, 220, 160, 8, TFT_RED);
+        const UiRect panel = m.dialogPanel(160);
+        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_DARKGREY);
+        tftInstance->drawRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_RED);
+
         tftInstance->setTextColor(TFT_YELLOW, TFT_DARKGREY);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("WARNING!", 120, 110, 4);
+        tftInstance->drawString("WARNING!", panel.cx(), (int16_t)(panel.y + 30), m.fontHeader);
+
         tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-        tftInstance->drawString("Format LittleFS &", 120, 140, 2);
-        tftInstance->drawString("Delete all Apps?", 120, 160, 2);
+        tftInstance->drawString("Format LittleFS &", panel.cx(), (int16_t)(panel.y + 60), m.fontBody);
+        tftInstance->drawString("Delete all Apps?", panel.cx(), (int16_t)(panel.y + 80), m.fontBody);
 
-        tftInstance->fillRoundRect(30, 190, 70, 30, 4, TFT_RED);
+        const int16_t rowY2 = (int16_t)(panel.y + 110);
+        const UiRect yes = m.dialogButtonSpaced(rowY2, 30, 0, 2, 70, 40);
+        const UiRect no  = m.dialogButtonSpaced(rowY2, 30, 1, 2, 70, 40);
+
+        tftInstance->fillRoundRect(yes.x, yes.y, yes.w, yes.h, 4, TFT_RED);
         tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-        tftInstance->drawString("Yes", 65, 205, 2);
+        tftInstance->drawString("Yes", yes.cx(), yes.cy(), m.fontBody);
 
-        tftInstance->fillRoundRect(140, 190, 70, 30, 4, TFT_GREEN);
+        tftInstance->fillRoundRect(no.x, no.y, no.w, no.h, 4, TFT_GREEN);
         tftInstance->setTextColor(TFT_BLACK, TFT_GREEN);
-        tftInstance->drawString("No", 175, 205, 2);
+        tftInstance->drawString("No", no.cx(), no.cy(), m.fontBody);
     }
 
-    // Touch Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 120, 300, 2);
+    drawSettingsFooter(tftInstance, "BACK");
 }
 
 void SettingsUI::handleAboutTouch(uint16_t x, uint16_t y) {
     extern int currentState;
     extern bool showResetDialog;
+    const UiMetrics& m = M();
 
     if (showResetDialog) {
-        if (y >= 190 && y <= 220) {
-            if (x >= 30 && x <= 100) { // Yes
-                tftInstance->fillScreen(TFT_BLACK);
-                tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-                tftInstance->setTextDatum(MC_DATUM);
-                tftInstance->drawString("Formatting...", 120, 160, 4);
+        const int16_t rowY = (int16_t)(m.dialogPanel(160).y + 110);
+        const UiRect yes = m.dialogButtonSpaced(rowY, 30, 0, 2, 70, 40);
+        const UiRect no  = m.dialogButtonSpaced(rowY, 30, 1, 2, 70, 40);
 
-                FileSystem::formatLittleFS();
+        if (yes.contains((int16_t)x, (int16_t)y)) {
+            tftInstance->fillScreen(TFT_BLACK);
+            tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
+            tftInstance->setTextDatum(MC_DATUM);
+            tftInstance->drawString("Formatting...", m.centerX, m.centerY, m.fontHeader);
 
-                tftInstance->drawString("Rebooting...", 120, 200, 4);
-                delay(1000);
-                ESP.restart();
-            } else if (x >= 140 && x <= 210) { // No
-                showResetDialog = false;
-                drawAbout();
-            }
+            FileSystem::formatLittleFS();
+
+            tftInstance->drawString("Rebooting...", m.centerX, (int16_t)(m.centerY + 40), m.fontHeader);
+            delay(1000);
+            ESP.restart();
+        } else if (no.contains((int16_t)x, (int16_t)y)) {
+            showResetDialog = false;
+            drawAbout();
         }
         return;
     }
 
     // Community Card Touched (Tap to refresh Live Stars)
-    if (x >= 10 && x <= 230 && y >= 134 && y <= 240) {
+    if (aboutCard2(m).contains((int16_t)x, (int16_t)y)) {
         if (WiFi.status() == WL_CONNECTED) {
+            const UiRect c2 = aboutCard2(m);
+            const int16_t rowY = (int16_t)(c2.y + 6 + (bodyLineStep(m) + 2));
             tftInstance->setTextColor(TFT_YELLOW, 0x10A2);
             tftInstance->setTextDatum(TL_DATUM);
-            tftInstance->drawString("Fetching...", 80, 162, 2);
+            tftInstance->drawString("Fetching...", (int16_t)(c2.x + 70), rowY, m.fontBody);
             fetchGitHubStarsLive();
             drawAbout();
         }
@@ -724,15 +912,15 @@ void SettingsUI::handleAboutTouch(uint16_t x, uint16_t y) {
     }
 
     // Reset Button Touched
-    if (x >= 40 && x <= 200 && y >= 248 && y <= 278) {
+    if (aboutResetButton(m).contains((int16_t)x, (int16_t)y)) {
         showResetDialog = true;
         drawAbout();
         return;
     }
 
     // Bottom Nav: BACK
-    if (y >= 285) {
-        if (x > 60 && x < 180) {
+    if (m.inFooter((int16_t)y)) {
+        if (m.footerButtonFromX((int16_t)x) == UI_FOOTER_SEL) {
             currentState = 1; // STATE_SETTINGS
         }
     }
@@ -765,55 +953,93 @@ static void saveAppInstallPreference() {
     }
 }
 
+namespace {
+// The Apps screen is a location toggle pinned under the header, then a list of installed apps.
+UiRect appsToggleRect(const UiMetrics& m) {
+    return { m.list.x, (int16_t)(m.header.y + m.header.h + 4), m.list.w, m.rowH };
+}
+
+int16_t appsListTop(const UiMetrics& m) { return (int16_t)(appsToggleRect(m).bottom() + 10); }
+int16_t appsRowH(const UiMetrics& m)     { return m.rowH; }
+int16_t appsRowPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 5); }
+
+// The rows run right down to the footer rather than stopping short of it, which is how the
+// historical layout fitted six apps on a 320px-tall screen.
+int appsPerPage(const UiMetrics& m) {
+    const int pitch = appsRowPitch(m);
+    if (pitch <= 0) return 1;
+    const int avail = m.footer.y - appsListTop(m);
+    const int n = (avail - appsRowH(m)) / pitch + 1;
+    return (n < 1) ? 1 : n;
+}
+
+UiRect appsRowRect(const UiMetrics& m, int visibleIndex) {
+    return { m.list.x, (int16_t)(appsListTop(m) + visibleIndex * appsRowPitch(m)),
+             m.list.w, appsRowH(m) };
+}
+
+// The per-app action sheet. Narrower than a dialog panel, and tall enough for a title plus three
+// buttons; the button height follows the row height so it still fits a short panel.
+UiRect appsMenuPanel(const UiMetrics& m) {
+    const int16_t w = (int16_t)(m.list.w - 20);
+    const int16_t h = (int16_t)(m.rowH * 5);
+    const int16_t x = (int16_t)(m.centerX - w / 2);
+    int16_t y = appsListTop(m);
+    const int16_t bottom = (int16_t)(m.footer.y - 15);
+    if (y + h > bottom) y = (int16_t)(bottom - h);
+    if (y < 0) y = 0;
+    return { x, y, w, h };
+}
+
+UiRect appsMenuButton(const UiMetrics& m, int index) {
+    const UiRect panel = appsMenuPanel(m);
+    const int16_t gap = (int16_t)(m.rowH / 3);
+    return { (int16_t)(panel.x + 10),
+             (int16_t)(panel.y + m.rowH + index * (m.rowH + gap)),
+             (int16_t)(panel.w - 20), m.rowH };
+}
+} // namespace
+
 void SettingsUI::drawApps() {
     if (!tftInstance) return;
-    
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    
-    // Header
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Manage Apps", 120, 21, 2);
+
+    const UiMetrics& m = M();
+    drawSettingsFrame(tftInstance, "Manage Apps");
 
     // Default Install Location Toggle Button
     if (totalApps == -1) loadAppInstallPreference();
-    
-    tftInstance->fillRoundRect(10, 40, 220, 30, 4, TFT_DARKGREY);
+
+    const UiRect toggle = appsToggleRect(m);
+    tftInstance->fillRoundRect(toggle.x, toggle.y, toggle.w, toggle.h, 4, TFT_DARKGREY);
     tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-    tftInstance->drawString(defaultInstallSD ? "Default Install: SD" : "Default Install: LFS", 120, 55, 2);
+    tftInstance->setTextDatum(MC_DATUM);
+    tftInstance->drawString(defaultInstallSD ? "Default Install: SD" : "Default Install: LFS",
+                            toggle.cx(), toggle.cy(), m.fontBody);
 
     // Load Apps
     if (totalApps == -1) {
         totalApps = 0;
         int c1 = FileSystem::listDirectory("/local/apps/", appEntries, 25);
         totalApps += c1;
-        
+
         // Also list /sd/apps/
         int c2 = FileSystem::listDirectory("/sd/apps/", appEntries + totalApps, 25);
         totalApps += c2;
     }
 
-    int yPos = 80;
-    int itemsPerPage = 6;
-    tftInstance->setTextDatum(TL_DATUM);
+    const int perPage = appsPerPage(m);
 
-    for (int i = 0; i < itemsPerPage; i++) {
-        int listIndex = appScroll + i;
+    for (int i = 0; i < perPage; i++) {
+        const int listIndex = appScroll + i;
         if (listIndex >= totalApps) break;
-        
+
         FileEntry entry = appEntries[listIndex];
-        
-        uint16_t color = TFT_WHITE;
-        if (listIndex == appSelected) {
-            tftInstance->fillRect(10, yPos, 220, 30, TFT_BLUE);
-        } else {
-            tftInstance->fillRect(10, yPos, 220, 30, TFT_BLACK);
-        }
-        
-        tftInstance->setTextColor(color);
+        const UiRect row = appsRowRect(m, i);
+        const bool selected = (listIndex == appSelected);
+
+        tftInstance->fillRect(row.x, row.y, row.w, row.h, selected ? TFT_BLUE : TFT_BLACK);
+
+        tftInstance->setTextColor(TFT_WHITE);
         // Show Name
         String displayName = entry.name;
         if (entry.isDir) {
@@ -826,70 +1052,102 @@ void SettingsUI::drawApps() {
                 if (parsedName.length() > 0) displayName = parsedName;
             }
         }
-        tftInstance->drawString(displayName, 15, yPos + 8, 2);
-        
+        tftInstance->setTextDatum(ML_DATUM);
+        tftInstance->drawString(displayName, (int16_t)(row.x + m.rowTextPadX), row.cy(), m.fontBody);
+
         // Show Drive Marker
-        String drive = entry.path.startsWith("/sd") ? "[SD]" : "[LFS]";
         tftInstance->setTextColor(TFT_YELLOW);
-        tftInstance->drawString(drive, 190, yPos + 8, 2);
-        
-        yPos += 35;
+        tftInstance->drawString(entry.path.startsWith("/sd") ? "[SD]" : "[LFS]",
+                                (int16_t)(row.right() - 40), row.cy(), m.fontBody);
     }
 
-    // Scroll buttons
-    if (appScroll > 0) {
-        tftInstance->fillTriangle(220, 85, 230, 100, 210, 100, TFT_WHITE);
-    }
-    if (appScroll + itemsPerPage < totalApps) {
-        tftInstance->fillTriangle(220, 275, 210, 260, 230, 260, TFT_WHITE);
+    // Scrollbar, spanning the same band as the rows
+    if (totalApps > perPage) {
+        const int trackTop = appsListTop(m);
+        const int trackH = m.footer.y - trackTop;
+        const int thumbH = max((int)m.scrollThumbMin, (trackH * perPage) / totalApps);
+        const int thumbY = trackTop + (appScroll * (trackH - thumbH)) / (totalApps - perPage);
+        tftInstance->fillRect(m.scrollX, trackTop, m.scrollW, trackH, TFT_DARKGREY);
+        tftInstance->fillRect(m.scrollX, thumbY, m.scrollW, thumbH, TFT_WHITE);
     }
 
     // Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 120, 300, 2);
+    if (totalApps > perPage) drawSettingsFooterScroll(tftInstance, "BACK");
+    else                     drawSettingsFooter(tftInstance, "BACK");
 
     // Draw Pop-Up Menu
     if (appMenuOpen && appSelected != -1) {
         FileEntry sel = appEntries[appSelected];
-        bool isSD = sel.path.startsWith("/sd");
-        
-        tftInstance->fillRoundRect(20, 80, 200, 150, 5, TFT_DARKGREY);
-        tftInstance->drawRoundRect(20, 80, 200, 150, 5, TFT_WHITE);
-        
+        const bool isSD = sel.path.startsWith("/sd");
+        const UiRect panel = appsMenuPanel(m);
+
+        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, 5, TFT_DARKGREY);
+        tftInstance->drawRoundRect(panel.x, panel.y, panel.w, panel.h, 5, TFT_WHITE);
+
         tftInstance->setTextColor(TFT_YELLOW, TFT_DARKGREY);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("App Actions", 120, 95, 2);
-        
-        // Button: Uninstall
-        tftInstance->fillRoundRect(30, 110, 180, 30, 4, TFT_RED);
+        tftInstance->drawString("App Actions", panel.cx(), (int16_t)(panel.y + 15), m.fontBody);
+
+        const UiRect uninstall = appsMenuButton(m, 0);
+        tftInstance->fillRoundRect(uninstall.x, uninstall.y, uninstall.w, uninstall.h, 4, TFT_RED);
         tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-        tftInstance->drawString("Uninstall", 120, 125, 2);
-        
-        // Button: Move
-        tftInstance->fillRoundRect(30, 150, 180, 30, 4, TFT_ORANGE);
+        tftInstance->drawString("Uninstall", uninstall.cx(), uninstall.cy(), m.fontBody);
+
+        const UiRect move = appsMenuButton(m, 1);
+        tftInstance->fillRoundRect(move.x, move.y, move.w, move.h, 4, TFT_ORANGE);
         tftInstance->setTextColor(TFT_BLACK, TFT_ORANGE);
-        tftInstance->drawString(isSD ? "Move to LFS" : "Move to SD", 120, 165, 2);
-        
-        // Button: Cancel
-        tftInstance->fillRoundRect(30, 190, 180, 30, 4, TFT_BLACK);
+        tftInstance->drawString(isSD ? "Move to LFS" : "Move to SD", move.cx(), move.cy(), m.fontBody);
+
+        const UiRect cancel = appsMenuButton(m, 2);
+        tftInstance->fillRoundRect(cancel.x, cancel.y, cancel.w, cancel.h, 4, TFT_BLACK);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Cancel", 120, 205, 2);
+        tftInstance->drawString("Cancel", cancel.cx(), cancel.cy(), m.fontBody);
     }
 }
 
 void SettingsUI::handleAppsTouch(uint16_t x, uint16_t y) {
     extern int currentState;
+    const UiMetrics& m = M();
 
     if (appMenuOpen) {
-        if (x >= 30 && x <= 210) {
-            FileEntry sel = appEntries[appSelected];
-            bool isSD = sel.path.startsWith("/sd");
-            
-            if (y >= 110 && y <= 140) {
-                // UNINSTALL
-                if (sel.isDir) {
+        FileEntry sel = appEntries[appSelected];
+        const bool isSD = sel.path.startsWith("/sd");
+
+        if (appsMenuButton(m, 0).contains((int16_t)x, (int16_t)y)) {
+            // UNINSTALL
+            if (sel.isDir) {
+                FileEntry existingFiles[50];
+                int existingCount = FileSystem::listDirectory(sel.path.c_str(), existingFiles, 50);
+                for (int i = 0; i < existingCount; i++) {
+                    if (!existingFiles[i].isDir) {
+                        FileSystem::deleteFile(existingFiles[i].path.c_str());
+                    }
+                }
+                FileSystem::rmdir(sel.path.c_str());
+            } else {
+                FileSystem::deleteFile(sel.path.c_str());
+            }
+            totalApps = -1; // Refresh list
+            appMenuOpen = false;
+            appSelected = -1;
+            drawApps();
+        } else if (appsMenuButton(m, 1).contains((int16_t)x, (int16_t)y)) {
+            // MOVE
+            String destDir = isSD ? "/local/apps/" : "/sd/apps/";
+            FileSystem::mkdir(destDir.c_str()); // Ensure dir exists
+            String destPath = destDir + sel.name;
+
+            // Transient "Moving..." pill
+            const UiRect pill = { (int16_t)(m.centerX - (m.list.w - 60) / 2),
+                                  (int16_t)(m.centerY - (m.rowH + 10) / 2),
+                                  (int16_t)(m.list.w - 60), (int16_t)(m.rowH + 10) };
+            tftInstance->fillRoundRect(pill.x, pill.y, pill.w, pill.h, 5, TFT_BLACK);
+            tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
+            tftInstance->setTextDatum(MC_DATUM);
+            tftInstance->drawString("Moving...", pill.cx(), pill.cy(), m.fontBody);
+
+            if (sel.isDir) {
+                if (FileSystem::copyDirectory(sel.path.c_str(), destPath.c_str())) {
                     FileEntry existingFiles[50];
                     int existingCount = FileSystem::listDirectory(sel.path.c_str(), existingFiles, 50);
                     for (int i = 0; i < existingCount; i++) {
@@ -898,98 +1156,60 @@ void SettingsUI::handleAppsTouch(uint16_t x, uint16_t y) {
                         }
                     }
                     FileSystem::rmdir(sel.path.c_str());
-                } else {
+                }
+            } else {
+                if (FileSystem::copyFile(sel.path.c_str(), destPath.c_str())) {
                     FileSystem::deleteFile(sel.path.c_str());
                 }
-                totalApps = -1; // Refresh list
-                appMenuOpen = false;
-                appSelected = -1;
-                drawApps();
-            } else if (y >= 150 && y <= 180) {
-                // MOVE
-                String destDir = isSD ? "/local/apps/" : "/sd/apps/";
-                FileSystem::mkdir(destDir.c_str()); // Ensure dir exists
-                String destPath = destDir + sel.name;
-                
-                tftInstance->fillRoundRect(40, 130, 160, 40, 5, TFT_BLACK);
-                tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-                tftInstance->setTextDatum(MC_DATUM);
-                tftInstance->drawString("Moving...", 120, 150, 2);
-                
-                if (sel.isDir) {
-                    if (FileSystem::copyDirectory(sel.path.c_str(), destPath.c_str())) {
-                        FileEntry existingFiles[50];
-                        int existingCount = FileSystem::listDirectory(sel.path.c_str(), existingFiles, 50);
-                        for (int i = 0; i < existingCount; i++) {
-                            if (!existingFiles[i].isDir) {
-                                FileSystem::deleteFile(existingFiles[i].path.c_str());
-                            }
-                        }
-                        FileSystem::rmdir(sel.path.c_str());
-                    }
-                } else {
-                    if (FileSystem::copyFile(sel.path.c_str(), destPath.c_str())) {
-                        FileSystem::deleteFile(sel.path.c_str());
-                    }
-                }
-                
-                totalApps = -1; // Refresh list
-                appMenuOpen = false;
-                appSelected = -1;
-                drawApps();
-            } else if (y >= 190 && y <= 220) {
-                // CANCEL
-                appMenuOpen = false;
-                drawApps();
             }
+
+            totalApps = -1; // Refresh list
+            appMenuOpen = false;
+            appSelected = -1;
+            drawApps();
+        } else if (appsMenuButton(m, 2).contains((int16_t)x, (int16_t)y)) {
+            // CANCEL
+            appMenuOpen = false;
+            drawApps();
         }
         return;
     }
 
     // Default Install Toggle
-    if (y >= 40 && y <= 70) {
+    if (appsToggleRect(m).contains((int16_t)x, (int16_t)y)) {
         defaultInstallSD = !defaultInstallSD;
         saveAppInstallPreference();
         drawApps();
         return;
     }
 
-    // Scroll Buttons
-    if (x >= 200 && y >= 80 && y <= 110) {
-        if (appScroll > 0) {
-            appScroll--;
-            drawApps();
-        }
-        return;
-    }
-    if (x >= 200 && y >= 250 && y <= 280) {
-        if (appScroll + 6 < totalApps) {
-            appScroll++;
-            drawApps();
-        }
+    // List Selection — walk the same rows drawApps() laid out
+    const int perPage = appsPerPage(m);
+    for (int i = 0; i < perPage; i++) {
+        if (appScroll + i >= totalApps) break;
+        if (!appsRowRect(m, i).contains((int16_t)x, (int16_t)y)) continue;
+        appSelected = appScroll + i;
+        appMenuOpen = true;
+        drawApps();
         return;
     }
 
-    // List Selection
-    if (y >= 80 && y <= 280) {
-        int indexClicked = appScroll + ((y - 80) / 35);
-        if (indexClicked < totalApps) {
-            appSelected = indexClicked;
-            appMenuOpen = true;
-            drawApps();
-        }
-        return;
-    }
-
-    // Bottom Nav: BACK
-    if (y >= 285) {
-        if (x > 60 && x < 180) {
-            totalApps = -1; // Reset state for next visit
-            appScroll = 0;
-            appSelected = -1;
-            appMenuOpen = false;
-            currentState = 1; // STATE_SETTINGS
-        }
+    // Bottom Nav
+    if (!m.inFooter((int16_t)y)) return;
+    switch (m.footerButtonFromX((int16_t)x)) {
+    case UI_FOOTER_UP:
+        if (appScroll > 0) { appScroll--; drawApps(); }
+        break;
+    case UI_FOOTER_DN:
+        if (appScroll + perPage < totalApps) { appScroll++; drawApps(); }
+        break;
+    default: // UI_FOOTER_SEL — BACK
+        totalApps = -1; // Reset state for next visit
+        appScroll = 0;
+        appSelected = -1;
+        appMenuOpen = false;
+        currentState = 1; // STATE_SETTINGS
+        break;
     }
 }
 
@@ -1054,175 +1274,249 @@ static void loadPermissionsData() {
     }
 }
 
+namespace {
+int16_t permCardH(const UiMetrics& m)     { return (int16_t)(m.rowH + 32); }
+int16_t permCardPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 38); }
+int16_t permCardsTop(const UiMetrics& m)  { return (int16_t)(m.header.bottom() + 6); }
+
+// "Reset All" shares the header row with the left-aligned title, so it is pinned to the right edge.
+UiRect permResetAllButton(const UiMetrics& m) {
+    const int16_t w = (int16_t)min((int)88, (int)(m.header.w / 2));
+    return { (int16_t)(m.header.right() - 6 - w), (int16_t)(m.header.y + 3), w,
+             (int16_t)(m.header.h - 6) };
+}
+
+int16_t permPagerH(const UiMetrics& m) { return (int16_t)min((int)28, (int)m.rowH); }
+int16_t permPagerY(const UiMetrics& m) { return (int16_t)(m.footer.y - m.rowH - 7); }
+
+UiRect permPrevButton(const UiMetrics& m) {
+    return { m.list.x, permPagerY(m), (int16_t)min((int)60, (int)(m.list.w / 3)), permPagerH(m) };
+}
+
+UiRect permNextButton(const UiMetrics& m) {
+    const int16_t w = (int16_t)min((int)60, (int)(m.list.w / 3));
+    return { (int16_t)(m.list.right() - w), permPagerY(m), w, permPagerH(m) };
+}
+
+// How many app cards fit. The pager band is only reserved once the list is known to paginate, hence
+// the parameter: the caller does one pass without the reservation and a second pass with it.
+int permCardsPerPage(const UiMetrics& m, bool reservePager) {
+    const int pitch = permCardPitch(m);
+    if (pitch <= 0) return 1;
+    const int bottom = reservePager ? (permPagerY(m) - 6) : (m.footer.y - 7);
+    const int n = (bottom - permCardsTop(m) - permCardH(m)) / pitch + 1;
+    return (n < 1) ? 1 : n;
+}
+
+UiRect permCardRect(const UiMetrics& m, int visibleIndex) {
+    return { m.list.x, (int16_t)(permCardsTop(m) + visibleIndex * permCardPitch(m)),
+             m.list.w, permCardH(m) };
+}
+
+UiRect permRevokeButton(const UiMetrics& m, int visibleIndex) {
+    const int16_t w = (int16_t)min((int)75, (int)(m.list.w / 2));
+    return { (int16_t)(m.list.right() - 10 - w),
+             (int16_t)(permCardRect(m, visibleIndex).y + max(8, (int)m.rowH * 3 / 4)),
+             w, (int16_t)max(14, (int)m.rowH) };
+}
+
+// Resolve the card count and page count together: reserving the pager band can only shrink the
+// cards-per-page figure, so a second pass settles it.
+void permResolvePages(const UiMetrics& m, int appCount, int& itemsPerPage, int& totalPages) {
+    itemsPerPage = permCardsPerPage(m, false);
+    totalPages = (appCount + itemsPerPage - 1) / itemsPerPage;
+    if (totalPages > 1) {
+        itemsPerPage = permCardsPerPage(m, true);
+        totalPages = (appCount + itemsPerPage - 1) / itemsPerPage;
+    }
+}
+} // namespace
+
 void SettingsUI::drawPermissions() {
     if (!tftInstance) return;
 
     loadPermissionsData();
 
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
+    const UiMetrics& m = M();
 
-    // Header Bar
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    // The title is left-aligned here because a Reset All button shares the header row.
+    // ML_DATUM at headerTextY puts the same pixels as the old TL_DATUM at y=13 (font 2 is 16px tall),
+    // but keeps the baseline centred if the header height ever changes.
+    drawSettingsBackdrop(tftInstance);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(TL_DATUM);
-    tftInstance->drawString("Permissions", 14, 13, 2);
+    tftInstance->setTextDatum(ML_DATUM);
+    tftInstance->drawString("Permissions", (int16_t)(m.header.x + 8), m.headerTextY, m.fontBody);
 
     // Reset All Button in header
     if (!s_permApps.empty()) {
-        tftInstance->fillRoundRect(140, 9, 88, 24, 4, TFT_RED);
+        const UiRect reset = permResetAllButton(m);
+        tftInstance->fillRoundRect(reset.x, reset.y, reset.w, reset.h, 4, TFT_RED);
         tftInstance->setTextColor(TFT_WHITE, TFT_RED);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("Reset All", 184, 21, 2);
+        tftInstance->drawString("Reset All", reset.cx(), reset.cy(), m.fontBody);
     }
 
     if (s_permResetConfirm) {
         // Confirmation Dialog
-        tftInstance->fillRoundRect(15, 75, 210, 160, 8, TFT_DARKGREY);
-        tftInstance->drawRoundRect(15, 75, 210, 160, 8, TFT_WHITE);
+        const UiRect panel = m.dialogPanel(160);
+        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_DARKGREY);
+        tftInstance->drawRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_WHITE);
 
         tftInstance->setTextDatum(MC_DATUM);
         tftInstance->setTextColor(TFT_GOLD, TFT_DARKGREY);
-        tftInstance->drawString("Reset Permissions?", 120, 98, 2);
+        tftInstance->drawString("Reset Permissions?", panel.cx(), (int16_t)(panel.y + 18), m.fontBody);
 
         tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-        tftInstance->drawString("Revoke and clear all", 120, 125, 2);
-        tftInstance->drawString("granted app permissions?", 120, 145, 2);
+        tftInstance->drawString("Revoke and clear all", panel.cx(), (int16_t)(panel.y + 45), m.fontBody);
+        tftInstance->drawString("granted app permissions?", panel.cx(), (int16_t)(panel.y + 65), m.fontBody);
 
-        // Confirm button
-        tftInstance->fillRoundRect(25, 180, 90, 34, 4, TFT_RED);
+        // Confirm / Cancel, centred under the text
+        const int16_t rowY = (int16_t)(panel.y + 100);
+        const UiRect confirm = m.dialogButtonSpaced(rowY, 34, 0, 2, 90, 10);
+        const UiRect cancel  = m.dialogButtonSpaced(rowY, 34, 1, 2, 90, 10);
+
+        tftInstance->fillRoundRect(confirm.x, confirm.y, confirm.w, confirm.h, 4, TFT_RED);
         tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-        tftInstance->drawString("Confirm", 70, 197, 2);
+        tftInstance->drawString("Confirm", confirm.cx(), confirm.cy(), m.fontBody);
 
-        // Cancel button
-        tftInstance->fillRoundRect(125, 180, 90, 34, 4, TFT_NAVY);
+        tftInstance->fillRoundRect(cancel.x, cancel.y, cancel.w, cancel.h, 4, TFT_NAVY);
         tftInstance->setTextColor(TFT_WHITE, TFT_NAVY);
-        tftInstance->drawString("Cancel", 170, 197, 2);
+        tftInstance->drawString("Cancel", cancel.cx(), cancel.cy(), m.fontBody);
 
-        // Footer
-        tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-        tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("BACK", 120, 300, 2);
+        drawSettingsFooter(tftInstance, "BACK");
         return;
     }
 
     if (s_permApps.empty()) {
-        tftInstance->fillRoundRect(10, 55, 220, 190, 6, 0x10A2); // Dark navy
-        tftInstance->drawRoundRect(10, 55, 220, 190, 6, TFT_CYAN);
+        const UiRect card = { m.list.x, (int16_t)(m.list.y + 10), m.list.w,
+                              (int16_t)(m.list.h - 40) };
+        tftInstance->fillRoundRect(card.x, card.y, card.w, card.h, 6, 0x10A2); // Dark navy
+        tftInstance->drawRoundRect(card.x, card.y, card.w, card.h, 6, TFT_CYAN);
+
+        // A title and two two-line paragraphs, evenly pitched off the row height.
+        const int16_t lh = (int16_t)(bodyLineStep(m) + 5);
+        int16_t y = (int16_t)(card.y + 30);
 
         tftInstance->setTextDatum(MC_DATUM);
         tftInstance->setTextColor(TFT_GOLD, 0x10A2);
-        tftInstance->drawString("No Granted Permissions", 120, 85, 2);
-
+        tftInstance->drawString("No Granted Permissions", card.cx(), y, m.fontBody);
         tftInstance->setTextColor(TFT_WHITE, 0x10A2);
-        tftInstance->drawString("Apps access internal folders", 120, 120, 2);
-        tftInstance->drawString("without permission.", 120, 140, 2);
-        tftInstance->drawString("External storage requests", 120, 175, 2);
-        tftInstance->drawString("will prompt on demand.", 120, 195, 2);
+        y += lh + 10;
+        tftInstance->drawString("Apps access internal folders", card.cx(), y, m.fontBody);
+        y += lh;
+        tftInstance->drawString("without permission.", card.cx(), y, m.fontBody);
+        y += lh + 10;
+        tftInstance->drawString("External storage requests", card.cx(), y, m.fontBody);
+        y += lh;
+        tftInstance->drawString("will prompt on demand.", card.cx(), y, m.fontBody);
     } else {
-        int itemsPerPage = 3;
-        int totalPages = (s_permApps.size() + itemsPerPage - 1) / itemsPerPage;
+        int itemsPerPage = 0, totalPages = 0;
+        permResolvePages(m, (int)s_permApps.size(), itemsPerPage, totalPages);
         if (s_permPage >= totalPages) s_permPage = totalPages - 1;
         if (s_permPage < 0) s_permPage = 0;
 
-        int startIdx = s_permPage * itemsPerPage;
-        int yPos = 42;
+        const int startIdx = s_permPage * itemsPerPage;
 
         for (int i = 0; i < itemsPerPage && (startIdx + i) < (int)s_permApps.size(); i++) {
             const PermAppEntry& entry = s_permApps[startIdx + i];
+            const UiRect card = permCardRect(m, i);
 
             // Card background
-            tftInstance->fillRoundRect(10, yPos, 220, 62, 5, 0x18C3);
-            tftInstance->drawRoundRect(10, yPos, 220, 62, 5, 0x2945);
+            tftInstance->fillRoundRect(card.x, card.y, card.w, card.h, 5, 0x18C3);
+            tftInstance->drawRoundRect(card.x, card.y, card.w, card.h, 5, 0x2945);
 
             // App Name & Package
             tftInstance->setTextDatum(TL_DATUM);
             tftInstance->setTextColor(TFT_WHITE, 0x18C3);
             String title = entry.appName;
             if (title.length() > 16) title = title.substring(0, 14) + "..";
-            tftInstance->drawString(title, 16, yPos + 6, 2);
+            tftInstance->drawString(title, (int16_t)(card.x + 6), (int16_t)(card.y + 6), m.fontBody);
 
             tftInstance->setTextColor(TFT_DARKGREY, 0x18C3);
             String sub = entry.packageName;
             if (sub.length() > 20) sub = sub.substring(0, 18) + "..";
-            tftInstance->drawString(sub, 16, yPos + 24, 1);
+            tftInstance->drawString(sub, (int16_t)(card.x + 6),
+                                    (int16_t)(card.y + m.rowH * 4 / 5), m.fontSmall);
 
             // Permission Badge
-            tftInstance->fillRoundRect(16, yPos + 38, 110, 18, 3, 0x03E0);
+            const int16_t badgeW = (int16_t)min((int)110, (int)(m.list.w / 2));
+            const int16_t badgeH = (int16_t)max(10, (int)m.rowH * 3 / 5);
+            const int16_t badgeY = (int16_t)(card.y + m.rowH + 8);
+            tftInstance->fillRoundRect((int16_t)(card.x + 6), badgeY, badgeW, badgeH, 3, 0x03E0);
             tftInstance->setTextColor(TFT_WHITE, 0x03E0);
             tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString("Storage: GRANTED", 71, yPos + 47, 1);
+            tftInstance->drawString("Storage: GRANTED", (int16_t)(card.x + 6 + badgeW / 2),
+                                    (int16_t)(badgeY + badgeH / 2), m.fontSmall);
 
             // Revoke Button
-            tftInstance->fillRoundRect(145, yPos + 22, 75, 30, 4, TFT_RED);
+            const UiRect revoke = permRevokeButton(m, i);
+            tftInstance->fillRoundRect(revoke.x, revoke.y, revoke.w, revoke.h, 4, TFT_RED);
             tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-            tftInstance->drawString("Revoke", 182, yPos + 37, 2);
-
-            yPos += 68;
+            tftInstance->drawString("Revoke", revoke.cx(), revoke.cy(), m.fontBody);
         }
 
-        // Pagination Bar (y: 248 to 278)
-        int totalApps = s_permApps.size();
+        // Pagination Bar
         if (totalPages > 1) {
+            const int16_t rowCY = permPrevButton(m).cy();
+            tftInstance->setTextDatum(MC_DATUM);
+
             // Prev Button
             if (s_permPage > 0) {
-                tftInstance->fillRoundRect(10, 248, 60, 28, 4, TFT_BLUE);
+                const UiRect prev = permPrevButton(m);
+                tftInstance->fillRoundRect(prev.x, prev.y, prev.w, prev.h, 4, TFT_BLUE);
                 tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
-                tftInstance->setTextDatum(MC_DATUM);
-                tftInstance->drawString("< Prev", 40, 262, 2);
+                tftInstance->drawString("< Prev", prev.cx(), prev.cy(), m.fontBody);
             }
 
             // Page Indicator
             tftInstance->setTextColor(TFT_YELLOW, TFT_BLACK);
-            tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString(String(s_permPage + 1) + "/" + String(totalPages), 120, 262, 2);
+            tftInstance->drawString(String(s_permPage + 1) + "/" + String(totalPages),
+                                    m.centerX, rowCY, m.fontBody);
 
             // Next Button
             if (s_permPage < totalPages - 1) {
-                tftInstance->fillRoundRect(170, 248, 60, 28, 4, TFT_BLUE);
+                const UiRect next = permNextButton(m);
+                tftInstance->fillRoundRect(next.x, next.y, next.w, next.h, 4, TFT_BLUE);
                 tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
-                tftInstance->setTextDatum(MC_DATUM);
-                tftInstance->drawString("Next >", 200, 262, 2);
+                tftInstance->drawString("Next >", next.cx(), next.cy(), m.fontBody);
             }
         }
     }
 
     // Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 120, 300, 2);
+    drawSettingsFooter(tftInstance, "BACK");
 }
 
 void SettingsUI::handlePermissionsTouch(uint16_t x, uint16_t y) {
     extern int currentState;
+    const UiMetrics& m = M();
 
     if (s_permResetConfirm) {
-        if (y >= 180 && y <= 214) {
-            if (x >= 25 && x <= 115) { // Confirm Reset
-                FileSystem::deleteFile("/local/system/app_permissions.json");
-                JSBindings::clearAllSessionPermissions();
-                s_permResetConfirm = false;
-                drawPermissions();
-                return;
-            } else if (x >= 125 && x <= 215) { // Cancel
-                s_permResetConfirm = false;
-                drawPermissions();
-                return;
-            }
+        const int16_t rowY = (int16_t)(m.dialogPanel(160).y + 100);
+        const UiRect confirm = m.dialogButtonSpaced(rowY, 34, 0, 2, 90, 10);
+        const UiRect cancel  = m.dialogButtonSpaced(rowY, 34, 1, 2, 90, 10);
+
+        if (confirm.contains((int16_t)x, (int16_t)y)) { // Confirm Reset
+            FileSystem::deleteFile("/local/system/app_permissions.json");
+            JSBindings::clearAllSessionPermissions();
+            s_permResetConfirm = false;
+            drawPermissions();
+            return;
         }
-        if (y >= 285 && x >= 60 && x <= 180) {
+        if (cancel.contains((int16_t)x, (int16_t)y)) { // Cancel
+            s_permResetConfirm = false;
+            drawPermissions();
+            return;
+        }
+        if (m.inFooter((int16_t)y) && m.footerButtonFromX((int16_t)x) == UI_FOOTER_SEL) {
             s_permResetConfirm = false;
             currentState = 1; // Back to Settings Menu
-            return;
         }
         return;
     }
 
-    // Header: Reset All Button (x: 140..228, y: 6..34)
-    if (!s_permApps.empty() && x >= 140 && x <= 228 && y >= 6 && y <= 34) {
+    // Header: Reset All Button
+    if (!s_permApps.empty() && permResetAllButton(m).contains((int16_t)x, (int16_t)y)) {
         s_permResetConfirm = true;
         drawPermissions();
         return;
@@ -1230,43 +1524,42 @@ void SettingsUI::handlePermissionsTouch(uint16_t x, uint16_t y) {
 
     // Revoke Buttons
     if (!s_permApps.empty()) {
-        int itemsPerPage = 3;
-        int startIdx = s_permPage * itemsPerPage;
-        int yPos = 42;
+        int itemsPerPage = 0, totalPages = 0;
+        permResolvePages(m, (int)s_permApps.size(), itemsPerPage, totalPages);
+        const int startIdx = s_permPage * itemsPerPage;
 
         for (int i = 0; i < itemsPerPage && (startIdx + i) < (int)s_permApps.size(); i++) {
-            if (x >= 145 && x <= 220 && y >= yPos + 22 && y <= yPos + 54) {
-                String pkg = s_permApps[startIdx + i].packageName;
-                
-                // Remove from app_permissions.json
-                String path = "/local/system/app_permissions.json";
-                if (FileSystem::exists(path.c_str())) {
-                    String content = FileSystem::readTextFile(path.c_str());
-                    JsonDocument doc;
-                    deserializeJson(doc, content);
-                    doc.remove(pkg);
-                    String out;
-                    serializeJson(doc, out);
-                    FileSystem::writeTextFile(path.c_str(), out.c_str());
-                }
+            if (!permRevokeButton(m, i).contains((int16_t)x, (int16_t)y)) continue;
 
-                // Clear session cache
-                JSBindings::revokeSessionPermission(pkg);
+            String pkg = s_permApps[startIdx + i].packageName;
 
-                drawPermissions();
-                return;
+            // Remove from app_permissions.json
+            String path = "/local/system/app_permissions.json";
+            if (FileSystem::exists(path.c_str())) {
+                String content = FileSystem::readTextFile(path.c_str());
+                JsonDocument doc;
+                deserializeJson(doc, content);
+                doc.remove(pkg);
+                String out;
+                serializeJson(doc, out);
+                FileSystem::writeTextFile(path.c_str(), out.c_str());
             }
-            yPos += 68;
+
+            // Clear session cache
+            JSBindings::revokeSessionPermission(pkg);
+
+            drawPermissions();
+            return;
         }
 
         // Pagination
-        int totalPages = (s_permApps.size() + itemsPerPage - 1) / itemsPerPage;
-        if (totalPages > 1 && y >= 248 && y <= 278) {
-            if (x >= 10 && x <= 70 && s_permPage > 0) {
+        if (totalPages > 1) {
+            if (s_permPage > 0 && permPrevButton(m).contains((int16_t)x, (int16_t)y)) {
                 s_permPage--;
                 drawPermissions();
                 return;
-            } else if (x >= 170 && x <= 230 && s_permPage < totalPages - 1) {
+            }
+            if (s_permPage < totalPages - 1 && permNextButton(m).contains((int16_t)x, (int16_t)y)) {
                 s_permPage++;
                 drawPermissions();
                 return;
@@ -1275,8 +1568,8 @@ void SettingsUI::handlePermissionsTouch(uint16_t x, uint16_t y) {
     }
 
     // Bottom Nav: BACK
-    if (y >= 285) {
-        if (x > 60 && x < 180) {
+    if (m.inFooter((int16_t)y)) {
+        if (m.footerButtonFromX((int16_t)x) == UI_FOOTER_SEL) {
             currentState = 1; // STATE_SETTINGS
         }
     }
@@ -1287,6 +1580,7 @@ void SettingsUI::handlePermissionsTouch(uint16_t x, uint16_t y) {
 // ----------------------------------------------------
 
 static int tzScroll = 0;
+static int timeActionScroll = 0;
 static bool tzSelectMode = false;
 
 struct TZEntry {
@@ -1324,133 +1618,230 @@ static TZEntry tzList[] = {
 };
 const int tzCount = sizeof(tzList) / sizeof(TZEntry);
 
+namespace {
+// The main Time screen: a fixed "current time" header, then a stack of option buttons.
+const int16_t TIME_HEADER_H = 65;
+
+int16_t timeBtnTop(const UiMetrics& m)   { return (int16_t)(m.list.y + TIME_HEADER_H); }
+int16_t timeBtnH(const UiMetrics& m)     { return (int16_t)(m.rowH + 5); }
+int16_t timeBtnPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 15); }
+
+int timeBtnPerPage(const UiMetrics& m) {
+    const int pitch = timeBtnPitch(m);
+    if (pitch <= 0) return 1;
+    const int avail = m.footer.y - timeBtnTop(m);
+    const int n = (avail - timeBtnH(m)) / pitch + 1;
+    return (n < 1) ? 1 : n;
+}
+
+UiRect timeButtonRect(const UiMetrics& m, int visibleIndex) {
+    return { (int16_t)(m.list.x + 10), (int16_t)(timeBtnTop(m) + visibleIndex * timeBtnPitch(m)),
+             (int16_t)(m.list.w - 20), timeBtnH(m) };
+}
+
+// Timezone picker rows sit just below the "Select Timezone" heading.
+int16_t tzRowsTop(const UiMetrics& m)  { return (int16_t)(m.list.y + 15); }
+int16_t tzRowPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 5); }
+
+int tzRowsPerPage(const UiMetrics& m) {
+    const int pitch = tzRowPitch(m);
+    if (pitch <= 0) return 1;
+    const int avail = m.footer.y - tzRowsTop(m);
+    const int n = (avail - m.rowH) / pitch + 1;
+    return (n < 1) ? 1 : n;
+}
+
+UiRect tzRowRect(const UiMetrics& m, int visibleIndex) {
+    return { m.list.x, (int16_t)(tzRowsTop(m) + visibleIndex * tzRowPitch(m)), m.list.w, m.rowH };
+}
+
+// --- Manual-time spinners -------------------------------------------------------------------
+// A spinner is an up triangle, a value box and a down triangle stacked in one rect.
+
+int16_t spinnerSectionH(const UiMetrics& m) { return (int16_t)(2 * (m.rowH / 2) + m.rowH + 10); }
+int16_t spinnerBoxY(const UiRect& r, const UiMetrics& m) { return (int16_t)(r.y + m.rowH / 2 + 5); }
+
+// The two spinner rows, one section apart.
+int16_t spinnerRowY(const UiMetrics& m, int rowIndex) {
+    return (int16_t)(m.list.y + 15 + rowIndex * (spinnerSectionH(m) + m.rowH));
+}
+
+// Tapping the upper half of a spinner increments it, the lower half decrements — the split falls on
+// the value box's centre line, so each half includes its own triangle.
+UiRect spinnerUpZone(const UiRect& r, const UiMetrics& m) {
+    const int16_t mid = (int16_t)(spinnerBoxY(r, m) + m.rowH / 2);
+    return { r.x, r.y, r.w, (int16_t)(mid - r.y) };
+}
+
+UiRect spinnerDownZone(const UiRect& r, const UiMetrics& m) {
+    const int16_t mid = (int16_t)(spinnerBoxY(r, m) + m.rowH / 2);
+    return { r.x, mid, r.w, (int16_t)(r.y + spinnerSectionH(m) - mid) };
+}
+
+// Date row: day / month / year. The weights (out of 22) reproduce the historical 50 / 50 / 70 px
+// widths and the two 20px separator gaps at a 240px screen width.
+UiRect dateSpinnerRect(const UiMetrics& m, int index) {
+    static const int kWeight[3] = { 5, 5, 7 };
+    static const int kLead[3]   = { 0, 7, 14 }; // cumulative weight + gap before this spinner
+    return { (int16_t)(m.list.x + (m.list.w * kLead[index]) / 22),
+             spinnerRowY(m, 0),
+             (int16_t)((m.list.w * kWeight[index]) / 22),
+             spinnerSectionH(m) };
+}
+
+int16_t dateSeparatorX(const UiMetrics& m, int index) {
+    return (int16_t)(dateSpinnerRect(m, index).right() + m.list.w / 22);
+}
+
+// Time row: hour : minute, centred on the canvas.
+UiRect timeSpinnerRect(const UiMetrics& m, int index) {
+    const int16_t w = (int16_t)(m.list.w * 3 / 11);
+    const int16_t gap = (int16_t)(m.list.w * 2 / 11); // the colon slot
+    const int16_t x = (index == 0) ? (int16_t)(m.centerX - gap / 2 - w)
+                                   : (int16_t)(m.centerX + gap / 2);
+    return { x, spinnerRowY(m, 1), w, spinnerSectionH(m) };
+}
+} // namespace
+
 void SettingsUI::drawTimeSettings() {
     if (!tftInstance) return;
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    
-    // Header
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_CYAN);
-    tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Time & Region", 120, 21, 2);
+    const UiMetrics& m = M();
+    drawSettingsFrame(tftInstance, "Time & Region", TFT_CYAN, TFT_CYAN);
 
     if (tzSelectMode) {
         // Draw TZ Selection Menu
         tftInstance->setTextColor(TFT_YELLOW, TFT_BLACK);
-        tftInstance->drawString("Select Timezone", 120, 45, 2);
-        
-        int yPos = 60;
-        int itemsPerPage = 6;
-        tftInstance->setTextDatum(TL_DATUM);
-        
-        for (int i = 0; i < itemsPerPage; i++) {
-            int listIndex = tzScroll + i;
+        tftInstance->setTextDatum(MC_DATUM);
+        tftInstance->drawString("Select Timezone", m.centerX, m.list.y, m.fontBody);
+
+        const int perPage = tzRowsPerPage(m);
+        tzScroll = clampScrollWindow(tzScroll, tzCount, perPage);
+
+        for (int i = 0; i < perPage; i++) {
+            const int listIndex = tzScroll + i;
             if (listIndex >= tzCount) break;
-            
-            if (String(tzList[listIndex].value) == TimeManager::currentTimezone) {
-                tftInstance->fillRect(10, yPos, 220, 30, TFT_BLUE);
-                tftInstance->setTextColor(TFT_WHITE);
-            } else {
-                tftInstance->fillRect(10, yPos, 220, 30, TFT_BLACK);
-                tftInstance->setTextColor(TFT_WHITE);
-            }
-            
-            tftInstance->drawString(tzList[listIndex].label, 15, yPos + 8, 2);
-            yPos += 35;
+
+            const UiRect row = tzRowRect(m, i);
+            const bool current = (String(tzList[listIndex].value) == TimeManager::currentTimezone);
+
+            tftInstance->fillRect(row.x, row.y, row.w, row.h, current ? TFT_BLUE : TFT_BLACK);
+            tftInstance->setTextColor(TFT_WHITE);
+            tftInstance->setTextDatum(ML_DATUM);
+            tftInstance->drawString(tzList[listIndex].label, (int16_t)(row.x + m.rowTextPadX),
+                                    row.cy(), m.fontBody);
         }
-        
-        // Scroll buttons
-        if (tzScroll > 0) tftInstance->fillTriangle(220, 65, 230, 80, 210, 80, TFT_WHITE);
-        if (tzScroll + itemsPerPage < tzCount) tftInstance->fillTriangle(220, 260, 210, 245, 230, 245, TFT_WHITE);
-        
-    } else {
-        // Draw Main Settings
-        tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Current Time:", 120, 50, 2);
-        tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-        tftInstance->drawString(TimeManager::getFormattedTime(), 120, 75, 4);
-        
-        int y = 110;
-        
-        // NTP Toggle
-        tftInstance->fillRoundRect(20, y, 200, 35, 5, TFT_DARKGREY);
-        tftInstance->setTextColor(TimeManager::ntpEnabled ? TFT_GREEN : TFT_RED, TFT_DARKGREY);
-        tftInstance->drawString(TimeManager::ntpEnabled ? "NTP Sync: ON" : "NTP Sync: OFF", 120, y + 17, 2);
-        y += 45;
-        
-        // Region Button
-        tftInstance->fillRoundRect(20, y, 200, 35, 5, TFT_BLUE);
-        tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
-        String r = "Region: " + TimeManager::currentTimezone;
-        tftInstance->drawString(r, 120, y + 17, 2);
-        y += 45;
-        
-        // Format Button
-        tftInstance->fillRoundRect(20, y, 200, 35, 5, TFT_ORANGE);
-        tftInstance->setTextColor(TFT_WHITE, TFT_ORANGE);
-        tftInstance->drawString(TimeManager::use24hFormat ? "Format: 24h" : "Format: 12h", 120, y + 17, 2);
-        y += 45;
-        
-        // Manual Time Button (Only active if NTP OFF)
-        if (!TimeManager::ntpEnabled) {
-            tftInstance->fillRoundRect(20, y, 200, 35, 5, TFT_PURPLE);
-            tftInstance->setTextColor(TFT_WHITE, TFT_PURPLE);
-            tftInstance->drawString("Set Manual Time", 120, y + 17, 2);
+
+        if (tzCount > perPage) {
+            const int trackTop = tzRowsTop(m);
+            const int trackH = m.footer.y - trackTop;
+            const int thumbH = max((int)m.scrollThumbMin, (trackH * perPage) / tzCount);
+            const int thumbY = trackTop + (tzScroll * (trackH - thumbH)) / (tzCount - perPage);
+            tftInstance->fillRect(m.scrollX, trackTop, m.scrollW, trackH, TFT_DARKGREY);
+            tftInstance->fillRect(m.scrollX, thumbY, m.scrollW, thumbH, TFT_WHITE);
         }
+
+        if (tzCount > perPage) drawSettingsFooterScroll(tftInstance, "BACK");
+        else                   drawSettingsFooter(tftInstance, "BACK");
+        return;
     }
-    
-    // Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
+
+    // Current time header
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 120, 300, 2);
+    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
+    tftInstance->drawString("Current Time:", m.centerX, (int16_t)(m.list.y + 5), m.fontBody);
+    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
+    tftInstance->drawString(TimeManager::getFormattedTime(), m.centerX,
+                            (int16_t)(m.list.y + 30), m.fontHeader);
+
+    // Options
+    struct TimeAction { String label; uint16_t bg; uint16_t fg; };
+    TimeAction actions[4];
+    int actionCount = 0;
+    actions[actionCount++] = { TimeManager::ntpEnabled ? String("NTP Sync: ON") : String("NTP Sync: OFF"),
+                               (uint16_t)TFT_DARKGREY,
+                               (uint16_t)(TimeManager::ntpEnabled ? TFT_GREEN : TFT_RED) };
+    actions[actionCount++] = { "Region: " + TimeManager::currentTimezone,
+                               (uint16_t)TFT_BLUE, (uint16_t)TFT_WHITE };
+    actions[actionCount++] = { TimeManager::use24hFormat ? String("Format: 24h") : String("Format: 12h"),
+                               (uint16_t)TFT_ORANGE, (uint16_t)TFT_WHITE };
+    if (!TimeManager::ntpEnabled) {
+        actions[actionCount++] = { String("Set Manual Time"), (uint16_t)TFT_PURPLE, (uint16_t)TFT_WHITE };
+    }
+
+    const int perPage = timeBtnPerPage(m);
+    timeActionScroll = clampScrollWindow(timeActionScroll, actionCount, perPage);
+
+    for (int i = 0; i < perPage; i++) {
+        const int idx = timeActionScroll + i;
+        if (idx >= actionCount) break;
+        const UiRect btn = timeButtonRect(m, i);
+        tftInstance->fillRoundRect(btn.x, btn.y, btn.w, btn.h, 5, actions[idx].bg);
+        tftInstance->setTextColor(actions[idx].fg, actions[idx].bg);
+        tftInstance->setTextDatum(MC_DATUM);
+        tftInstance->drawString(actions[idx].label, btn.cx(), btn.cy(), m.fontBody);
+    }
+
+    if (actionCount > perPage) {
+        const int thumbH = max((int)m.scrollThumbMin, (m.list.h * perPage) / actionCount);
+        const int thumbY = m.list.y + (timeActionScroll * (m.list.h - thumbH)) / (actionCount - perPage);
+        tftInstance->fillRect(m.scrollX, m.list.y, m.scrollW, m.list.h, TFT_DARKGREY);
+        tftInstance->fillRect(m.scrollX, thumbY, m.scrollW, thumbH, TFT_WHITE);
+    }
+
+    if (actionCount > perPage) drawSettingsFooterScroll(tftInstance, "BACK");
+    else                       drawSettingsFooter(tftInstance, "BACK");
 }
 
 void SettingsUI::handleTimeTouch(uint16_t x, uint16_t y) {
     extern int currentState;
-    
+    const UiMetrics& m = M();
+
     if (tzSelectMode) {
-        if (x >= 200 && y >= 60 && y <= 90 && tzScroll > 0) {
-            tzScroll--; drawTimeSettings(); return;
-        }
-        if (x >= 200 && y >= 230 && y <= 260 && tzScroll + 6 < tzCount) {
-            tzScroll++; drawTimeSettings(); return;
-        }
-        
-        if (y >= 60 && y <= 270) {
-            int idx = tzScroll + ((y - 60) / 35);
-            if (idx < tzCount) {
-                TimeManager::setTimezone(tzList[idx].value);
-                tzSelectMode = false;
-                drawTimeSettings();
-            }
-        }
-        
-        if (y >= 285 && x > 60 && x < 180) {
+        const int perPage = tzRowsPerPage(m);
+
+        for (int i = 0; i < perPage; i++) {
+            const int idx = tzScroll + i;
+            if (idx >= tzCount) break;
+            if (!tzRowRect(m, i).contains((int16_t)x, (int16_t)y)) continue;
+            TimeManager::setTimezone(tzList[idx].value);
             tzSelectMode = false;
             drawTimeSettings();
+            return;
+        }
+
+        if (!m.inFooter((int16_t)y)) return;
+        switch (m.footerButtonFromX((int16_t)x)) {
+        case UI_FOOTER_UP:
+            if (tzScroll > 0) { tzScroll--; drawTimeSettings(); }
+            break;
+        case UI_FOOTER_DN:
+            if (tzScroll < tzCount - perPage) { tzScroll++; drawTimeSettings(); }
+            break;
+        default: // UI_FOOTER_SEL — cancel the picker
+            tzSelectMode = false;
+            drawTimeSettings();
+            break;
         }
         return;
     }
 
-    if (x >= 20 && x <= 220) {
-        if (y >= 110 && y <= 145) {
-            TimeManager::setNTPEnabled(!TimeManager::ntpEnabled);
-            drawTimeSettings();
-        } else if (y >= 155 && y <= 190) {
-            tzSelectMode = true;
-            drawTimeSettings();
-        } else if (y >= 200 && y <= 235) {
-            TimeManager::setTimeFormat(!TimeManager::use24hFormat);
-            drawTimeSettings();
-        } else if (y >= 245 && y <= 280 && !TimeManager::ntpEnabled) {
-            currentState = 10; // STATE_SETTINGS_TIME_MANUAL
+    const int actionCount = TimeManager::ntpEnabled ? 3 : 4;
+    const int perPage = timeBtnPerPage(m);
+
+    for (int i = 0; i < perPage; i++) {
+        const int idx = timeActionScroll + i;
+        if (idx >= actionCount) break;
+        if (!timeButtonRect(m, i).contains((int16_t)x, (int16_t)y)) continue;
+
+        switch (idx) {
+        case 0: TimeManager::setNTPEnabled(!TimeManager::ntpEnabled);   drawTimeSettings(); return;
+        case 1: tzSelectMode = true;                                    drawTimeSettings(); return;
+        case 2: TimeManager::setTimeFormat(!TimeManager::use24hFormat); drawTimeSettings(); return;
+        default: currentState = 10; return; // STATE_SETTINGS_TIME_MANUAL
         }
     }
-    
-    if (y >= 285 && x > 60 && x < 180) {
+
+    if (m.inFooter((int16_t)y) && m.footerButtonFromX((int16_t)x) == UI_FOOTER_SEL) {
         currentState = 1; // STATE_SETTINGS
     }
 }
@@ -1462,80 +1853,90 @@ void SettingsUI::handleTimeTouch(uint16_t x, uint16_t y) {
 static int mDay = 1, mMonth = 1, mYear = 2026, mHour = 12, mMinute = 0;
 static bool loadedManual = false;
 
+// An up triangle, a value box and a down triangle, all anchored to the spinner rect.
+static void drawTimeSpinner(TFT_eSPI* t, const UiMetrics& m, const UiRect& r, const String& val) {
+    const int16_t triH = (int16_t)(m.rowH / 2);
+    const int16_t boxY = spinnerBoxY(r, m);
+
+    t->fillTriangle(r.cx(), r.y, (int16_t)(r.right() - 5), (int16_t)(r.y + triH),
+                    (int16_t)(r.x + 5), (int16_t)(r.y + triH), TFT_GREEN);
+    t->fillRoundRect(r.x, boxY, r.w, m.rowH, 4, TFT_DARKGREY);
+    t->setTextColor(TFT_WHITE, TFT_DARKGREY);
+    t->setTextDatum(MC_DATUM);
+    t->drawString(val, r.cx(), (int16_t)(boxY + m.rowH / 2), m.fontBody);
+
+    const int16_t downY = (int16_t)(boxY + m.rowH + 5);
+    t->fillTriangle((int16_t)(r.x + 5), downY, (int16_t)(r.right() - 5), downY,
+                    r.cx(), (int16_t)(downY + triH), TFT_RED);
+}
+
 void SettingsUI::drawTimeManual() {
     if (!tftInstance) return;
-    
+
     if (!loadedManual) {
         mYear = TimeManager::getYear();
         mMonth = TimeManager::getMonth();
         mDay = TimeManager::getDay();
-        
+
         time_t now; time(&now);
         struct tm tinfo; localtime_r(&now, &tinfo);
         mHour = tinfo.tm_hour;
         mMinute = tinfo.tm_min;
         loadedManual = true;
     }
-    
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    
-    // Header
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_PURPLE);
-    tftInstance->setTextColor(TFT_PURPLE, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Set Time", 120, 21, 2);
 
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    
-    // Helper lambda to draw an up/down section
-    auto drawSection = [](int x, int y, int w, String val) {
-        tftInstance->fillTriangle(x + w/2, y, x + w - 5, y + 15, x + 5, y + 15, TFT_GREEN);
-        tftInstance->fillRoundRect(x, y + 20, w, 30, 4, TFT_DARKGREY);
-        tftInstance->drawString(val, x + w/2, y + 35, 2);
-        tftInstance->fillTriangle(x + 5, y + 55, x + w - 5, y + 55, x + w/2, y + 70, TFT_RED);
-    };
+    const UiMetrics& m = M();
+    drawSettingsFrame(tftInstance, "Set Time", TFT_PURPLE, TFT_PURPLE);
 
     // Date Line
-    drawSection(10, 60, 50, String(mDay));
-    tftInstance->drawString("/", 70, 95, 2);
-    drawSection(80, 60, 50, String(mMonth));
-    tftInstance->drawString("/", 140, 95, 2);
-    drawSection(150, 60, 70, String(mYear));
-    
+    drawTimeSpinner(tftInstance, m, dateSpinnerRect(m, 0), String(mDay));
+    tftInstance->setTextDatum(MC_DATUM);
+    tftInstance->drawString("/", dateSeparatorX(m, 0), dateSpinnerRect(m, 0).cy(), m.fontBody);
+    drawTimeSpinner(tftInstance, m, dateSpinnerRect(m, 1), String(mMonth));
+    tftInstance->drawString("/", dateSeparatorX(m, 1), dateSpinnerRect(m, 1).cy(), m.fontBody);
+    drawTimeSpinner(tftInstance, m, dateSpinnerRect(m, 2), String(mYear));
+
     // Time Line
-    drawSection(40, 160, 60, String(mHour));
-    tftInstance->drawString(":", 120, 195, 4);
+    drawTimeSpinner(tftInstance, m, timeSpinnerRect(m, 0), String(mHour));
+    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
+    tftInstance->setTextDatum(MC_DATUM);
+    tftInstance->drawString(":", m.centerX, timeSpinnerRect(m, 0).cy(), m.fontHeader);
     char mBuf[8]; snprintf(mBuf, sizeof(mBuf), "%02d", mMinute);
-    drawSection(140, 160, 60, String(mBuf));
-    
+    drawTimeSpinner(tftInstance, m, timeSpinnerRect(m, 1), String(mBuf));
+
     // Save Footer
-    tftInstance->fillRoundRect(5, 285, 230, 30, 5, TFT_GREEN);
+    tftInstance->fillRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_GREEN);
     tftInstance->setTextColor(TFT_BLACK, TFT_GREEN);
-    tftInstance->drawString("SAVE & BACK", 120, 300, 2);
+    tftInstance->setTextDatum(MC_DATUM);
+    tftInstance->drawString("SAVE & BACK", m.footerButtonCenterX(UI_FOOTER_SEL),
+                            m.footerTextY, m.fontBody);
 }
 
 void SettingsUI::handleTimeManualTouch(uint16_t x, uint16_t y) {
     extern int currentState;
-    
-    auto checkClick = [&](int bx, int by, int bw, int &val, int minV, int maxV) {
-        if (x >= bx && x <= bx + bw) {
-            if (y >= by && y <= by + 20) { val++; if (val > maxV) val = minV; drawTimeManual(); }
-            if (y >= by + 50 && y <= by + 75) { val--; if (val < minV) val = maxV; drawTimeManual(); }
+    const UiMetrics& m = M();
+
+    // Tapping the top half of a spinner increments it, the bottom half decrements it; both wrap.
+    auto checkClick = [&](const UiRect& r, int& val, int minV, int maxV) {
+        if (spinnerUpZone(r, m).contains((int16_t)x, (int16_t)y)) {
+            if (++val > maxV) val = minV;
+            drawTimeManual();
+        } else if (spinnerDownZone(r, m).contains((int16_t)x, (int16_t)y)) {
+            if (--val < minV) val = maxV;
+            drawTimeManual();
         }
     };
 
     // Date Line
-    checkClick(10, 60, 50, mDay, 1, 31);
-    checkClick(80, 60, 50, mMonth, 1, 12);
-    checkClick(150, 60, 70, mYear, 2000, 2100);
-    
-    // Time Line
-    checkClick(40, 160, 60, mHour, 0, 23);
-    checkClick(140, 160, 60, mMinute, 0, 59);
+    checkClick(dateSpinnerRect(m, 0), mDay, 1, 31);
+    checkClick(dateSpinnerRect(m, 1), mMonth, 1, 12);
+    checkClick(dateSpinnerRect(m, 2), mYear, 2000, 2100);
 
-    if (y >= 285) {
+    // Time Line
+    checkClick(timeSpinnerRect(m, 0), mHour, 0, 23);
+    checkClick(timeSpinnerRect(m, 1), mMinute, 0, 59);
+
+    if (m.inFooter((int16_t)y)) {
         TimeManager::setManualTime(mYear, mMonth, mDay, mHour, mMinute);
         loadedManual = false;
         currentState = 9; // STATE_SETTINGS_TIME
@@ -1546,17 +1947,43 @@ void SettingsUI::handleTimeManualTouch(uint16_t x, uint16_t y) {
 // WIFI SCANNER AND CONNECT UI
 // ----------------------------------------------------
 
+namespace {
+// The scanner list: one card per access point, plus a Cancel / Next Page bar pinned above the footer.
+int16_t scanCardH(const UiMetrics& m)     { return (int16_t)(m.rowH + 12); }
+int16_t scanCardPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 16); }
+int16_t scanCardsTop(const UiMetrics& m)  { return (int16_t)(m.header.bottom() + 10); }
+
+int scanCardsPerPage(const UiMetrics& m) {
+    const int pitch = scanCardPitch(m);
+    if (pitch <= 0) return 1;
+    const int avail = m.footer.y - scanCardsTop(m);
+    const int n = (avail - scanCardH(m)) / pitch + 1;
+    return (n < 1) ? 1 : n;
+}
+
+UiRect scanCardRect(const UiMetrics& m, int visibleIndex) {
+    return { m.list.x, (int16_t)(scanCardsTop(m) + visibleIndex * scanCardPitch(m)),
+             m.list.w, scanCardH(m) };
+}
+
+UiRect scanCancelButton(const UiMetrics& m) {
+    return { m.list.x, (int16_t)(m.footer.y - 7), (int16_t)min((int)100, (int)(m.list.w / 2)), 32 };
+}
+
+UiRect scanNextButton(const UiMetrics& m) {
+    const int16_t w = (int16_t)min((int)100, (int)(m.list.w / 2));
+    return { (int16_t)(m.list.right() - w), (int16_t)(m.footer.y - 7), w, 32 };
+}
+} // namespace
+
 void SettingsUI::scanAndConnectWiFi() {
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("WiFi Scanner", 120, 21, 2);
+    const UiMetrics& m = M();
+    drawSettingsFrame(tftInstance, "WiFi Scanner");
 
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Scanning 2.4GHz Networks...", 120, 140, 2);
+    tftInstance->setTextDatum(MC_DATUM);
+    tftInstance->drawString("Scanning 2.4GHz Networks...", m.centerX, (int16_t)(m.centerY - 20),
+                            m.fontBody);
 
     // Initialize WiFi in Station Mode and start async scan
     WiFi.mode(WIFI_STA);
@@ -1567,13 +1994,14 @@ void SettingsUI::scanAndConnectWiFi() {
     // Animated spinner while scanning
     int spinAngle = 0;
     int16_t scanStatus = WIFI_SCAN_RUNNING;
+    const int16_t spinY = (int16_t)(m.centerY + 30);
+    const int16_t spinR = (int16_t)max(6, min(18, (int)(m.list.h / 12)));
     while ((scanStatus = WiFi.scanComplete()) == WIFI_SCAN_RUNNING) {
         // Draw spinning radar / circle
-        int cx = 120, cy = 190, r = 18;
-        tftInstance->drawCircle(cx, cy, r, TFT_DARKGREY);
+        tftInstance->drawCircle(m.centerX, spinY, spinR, TFT_DARKGREY);
         float rad = spinAngle * (PI / 180.0f);
-        int px = cx + (int)(cos(rad) * r);
-        int py = cy + (int)(sin(rad) * r);
+        int px = m.centerX + (int)(cos(rad) * spinR);
+        int py = spinY + (int)(sin(rad) * spinR);
         tftInstance->fillCircle(px, py, 4, TFT_CYAN);
         delay(40);
         tftInstance->fillCircle(px, py, 4, TFT_BLACK); // clear dot
@@ -1586,33 +2014,27 @@ void SettingsUI::scanAndConnectWiFi() {
     if (n <= 0) {
         tftInstance->fillScreen(TFT_BLACK);
         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
-        tftInstance->drawString("No networks found.", 120, 160, 2);
+        tftInstance->setTextDatum(MC_DATUM);
+        tftInstance->drawString("No networks found.", m.centerX, m.centerY, m.fontBody);
         delay(1500);
         drawWiFi();
         return;
     }
 
     int currentPage = 0;
-    int networksPerPage = 5;
+    const int networksPerPage = scanCardsPerPage(m);
     int totalPages = (n + networksPerPage - 1) / networksPerPage;
     auto savedNets = WiFiManager::getSavedNetworks();
 
     while (true) {
-        tftInstance->fillScreen(TFT_BLACK);
-        tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-        tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-        tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
-        tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-        tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("Select Network (" + String(n) + ")", 120, 21, 2);
+        drawSettingsFrame(tftInstance, ("Select Network (" + String(n) + ")").c_str());
 
-        int startIdx = currentPage * networksPerPage;
+        const int startIdx = currentPage * networksPerPage;
         int endIdx = startIdx + networksPerPage;
         if (endIdx > n) endIdx = n;
 
-        int yPos = 46;
-        tftInstance->setTextDatum(TL_DATUM);
         for (int i = startIdx; i < endIdx; i++) {
+            const UiRect card = scanCardRect(m, i - startIdx);
             String ssid = WiFi.SSID(i);
             int rssi = WiFi.RSSI(i);
             bool isSaved = false;
@@ -1621,14 +2043,18 @@ void SettingsUI::scanAndConnectWiFi() {
             }
 
             // Draw card
-            tftInstance->fillRoundRect(10, yPos, 220, 42, 5, isSaved ? 0x18C3 : TFT_DARKGREY);
-            tftInstance->drawRoundRect(10, yPos, 220, 42, 5, isSaved ? TFT_CYAN : TFT_WHITE);
-            
+            const uint16_t cardBg = isSaved ? 0x18C3 : TFT_DARKGREY;
+            tftInstance->fillRoundRect(card.x, card.y, card.w, card.h, 5, cardBg);
+            tftInstance->drawRoundRect(card.x, card.y, card.w, card.h, 5,
+                                       isSaved ? TFT_CYAN : TFT_WHITE);
+
             String displaySSID = ssid;
             if (displaySSID.length() > 14) displaySSID = displaySSID.substring(0, 12) + "..";
-            
-            tftInstance->setTextColor(TFT_WHITE, isSaved ? 0x18C3 : TFT_DARKGREY);
-            tftInstance->drawString(displaySSID, 18, yPos + 6, 2);
+
+            tftInstance->setTextColor(TFT_WHITE, cardBg);
+            tftInstance->setTextDatum(TL_DATUM);
+            tftInstance->drawString(displaySSID, (int16_t)(card.x + 8), (int16_t)(card.y + 6),
+                                    m.fontBody);
 
             // Signal bars
             int bars = 1;
@@ -1636,37 +2062,42 @@ void SettingsUI::scanAndConnectWiFi() {
             else if (rssi >= -65) bars = 3;
             else if (rssi >= -75) bars = 2;
 
-            int sx = 145, sy = yPos + 22;
+            const int sx = card.x + 135;
+            const int sy = card.y + card.h - 20;
             for (int b = 1; b <= 4; b++) {
-                uint16_t bColor = (b <= bars) ? TFT_GREEN : 0x4208;
+                const uint16_t bColor = (b <= bars) ? TFT_GREEN : 0x4208;
                 tftInstance->fillRect(sx + (b - 1) * 4, sy - (b * 2), 3, b * 2, bColor);
             }
 
-            // Lock icon or Open text
+            // Saved / Open / Secure marker, right-aligned in the card
+            tftInstance->setTextDatum(MR_DATUM);
             if (isSaved) {
-                tftInstance->setTextColor(TFT_CYAN, 0x18C3);
-                tftInstance->drawString("SAVED", 170, yPos + 6, 2);
+                tftInstance->setTextColor(TFT_CYAN, cardBg);
+                tftInstance->drawString("SAVED", (int16_t)(card.right() - 30),
+                                        (int16_t)(card.y + 14), m.fontBody);
             } else if (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) {
-                tftInstance->setTextColor(TFT_GREEN, TFT_DARKGREY);
-                tftInstance->drawString("OPEN", 175, yPos + 6, 2);
+                tftInstance->setTextColor(TFT_GREEN, cardBg);
+                tftInstance->drawString("OPEN", (int16_t)(card.right() - 30),
+                                        (int16_t)(card.y + 14), m.fontBody);
             } else {
-                tftInstance->setTextColor(TFT_RED, TFT_DARKGREY);
-                tftInstance->drawString("SECURE", 168, yPos + 6, 2);
+                tftInstance->setTextColor(TFT_RED, cardBg);
+                tftInstance->drawString("SECURE", (int16_t)(card.right() - 30),
+                                        (int16_t)(card.y + 14), m.fontBody);
             }
-            
-            yPos += 46;
         }
 
         // Draw pagination or Cancel
-        tftInstance->fillRoundRect(10, 278, 100, 32, 5, TFT_RED);
+        const UiRect cancel = scanCancelButton(m);
+        tftInstance->fillRoundRect(cancel.x, cancel.y, cancel.w, cancel.h, 5, TFT_RED);
         tftInstance->setTextColor(TFT_WHITE, TFT_RED);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("Cancel", 60, 294, 2);
+        tftInstance->drawString("Cancel", cancel.cx(), cancel.cy(), m.fontBody);
 
         if (totalPages > 1) {
-            tftInstance->fillRoundRect(130, 278, 100, 32, 5, TFT_BLUE);
+            const UiRect next = scanNextButton(m);
+            tftInstance->fillRoundRect(next.x, next.y, next.w, next.h, 5, TFT_BLUE);
             tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
-            tftInstance->drawString("Next Page", 180, 294, 2);
+            tftInstance->drawString("Next Page", next.cx(), next.cy(), m.fontBody);
         }
 
         // Touch handling loop
@@ -1682,13 +2113,13 @@ void SettingsUI::scanAndConnectWiFi() {
         }
 
         // Check if Cancel tapped
-        if (ty >= 278 && ty <= 312 && tx >= 10 && tx <= 110) {
+        if (scanCancelButton(m).contains((int16_t)tx, (int16_t)ty)) {
             drawWiFi();
             return;
         }
 
         // Check if Next Page tapped
-        if (totalPages > 1 && ty >= 278 && ty <= 312 && tx >= 130 && tx <= 230) {
+        if (totalPages > 1 && scanNextButton(m).contains((int16_t)tx, (int16_t)ty)) {
             currentPage++;
             if (currentPage >= totalPages) currentPage = 0;
             continue; // redraw
@@ -1696,13 +2127,11 @@ void SettingsUI::scanAndConnectWiFi() {
 
         // Check if a network was tapped
         int tappedIndex = -1;
-        int checkY = 46;
         for (int i = startIdx; i < endIdx; i++) {
-            if (ty >= checkY && ty <= checkY + 42 && tx >= 10 && tx <= 230) {
+            if (scanCardRect(m, i - startIdx).contains((int16_t)tx, (int16_t)ty)) {
                 tappedIndex = i;
                 break;
             }
-            checkY += 46;
         }
 
         if (tappedIndex != -1) {
@@ -1731,14 +2160,16 @@ void SettingsUI::scanAndConnectWiFi() {
             tftInstance->fillScreen(TFT_BLACK);
             tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
             tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString("Connecting to", 120, 140, 2);
-            tftInstance->drawString(selectedSSID + "...", 120, 165, 2);
+            tftInstance->drawString("Connecting to", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
+            tftInstance->drawString(selectedSSID + "...", m.centerX, (int16_t)(m.centerY + 5),
+                                    m.fontBody);
 
             bool success = WiFiManager::connectTo(selectedSSID, password, 10000);
 
             tftInstance->fillScreen(TFT_BLACK);
             tftInstance->setTextColor(success ? TFT_GREEN : TFT_RED, TFT_BLACK);
-            tftInstance->drawString(success ? "Connected Successfully!" : "Connection Failed!", 120, 160, 2);
+            tftInstance->drawString(success ? "Connected Successfully!" : "Connection Failed!",
+                                    m.centerX, m.centerY, m.fontBody);
             delay(1200);
 
             drawWiFi();
@@ -1746,6 +2177,7 @@ void SettingsUI::scanAndConnectWiFi() {
         }
     }
 }
+
 // ----------------------------------------------------
 // SYSTEM UPDATER
 // ----------------------------------------------------
@@ -1784,142 +2216,207 @@ bool SettingsUI::checkUpdateSilent() {
     return OTAManager::checkUpdate(false);
 }
 
+// The OTA screens draw their own 1px-inset cyan/red frame rather than the Settings chrome.
+static UiRect otaPanel(const UiMetrics& m) {
+    return { (int16_t)(m.frame.x + 1), (int16_t)(m.frame.y + 1),
+             (int16_t)(m.frame.w - 2), (int16_t)(m.frame.h - 2) };
+}
+
+// The big centred readout: font 6 is 48px tall, which only fits a full-height panel.
+static uint8_t otaBigFont(const UiMetrics& m)   { return (m.h >= 240) ? 6 : (uint8_t)m.fontHeader; }
+static uint8_t otaTitleFont(const UiMetrics& m) { return (m.h >= 240) ? 4 : (uint8_t)m.fontHeader; }
+
+static UiRect otaBarRect(const UiMetrics& m) {
+    const int16_t h = (int16_t)max(8, (int)(m.rowH * 2 / 3));
+    return { (int16_t)(m.list.x + 8), (int16_t)(m.centerY - 15), (int16_t)(m.list.w - 16), h };
+}
+
+static UiRect otaErrorHeader(const UiMetrics& m) {
+    return { m.list.x, (int16_t)(m.header.y + 4), m.list.w, (int16_t)(m.header.h + 6) };
+}
+
+// The two stacked buttons at the foot of the error screen; the card above fills the gap between
+// the header and the retry button.
+static UiRect otaErrorBackButton(const UiMetrics& m) {
+    return { (int16_t)(m.list.x + 5), (int16_t)(m.footer.y - 13), (int16_t)(m.list.w - 10),
+             (int16_t)(m.header.h + 6) };
+}
+
+static UiRect otaErrorRetryButton(const UiMetrics& m) {
+    const UiRect back = otaErrorBackButton(m);
+    return { back.x, (int16_t)(back.y - 48), back.w, (int16_t)(back.h + 2) };
+}
+
+static UiRect otaErrorCard(const UiMetrics& m) {
+    const int16_t top = (int16_t)(otaErrorHeader(m).bottom() + 10);
+    return { m.list.x, top, m.list.w, (int16_t)(otaErrorRetryButton(m).y - 10 - top) };
+}
+
+// Shared by both updater states: the dismiss chip sits just above the footer, and the install chip
+// stacks 44px above it.
+static UiRect updaterDismissButton(const UiMetrics& m) {
+    return { m.list.x, (int16_t)(m.footer.y - 7), m.list.w, 32 };
+}
+
+static UiRect updaterInstallButton(const UiMetrics& m) {
+    return { m.list.x, (int16_t)(updaterDismissButton(m).y - 44), m.list.w, 36 };
+}
+
 void SettingsUI::drawOTAProgress(int percent, size_t currentBytes, size_t totalBytes, float speedKBs, const String& status) {
     if (!tftInstance) return;
 
+    const UiMetrics& m = M();
     tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(4, 4, 232, 312, 6, TFT_CYAN);
+    const UiRect panel = otaPanel(m);
+    tftInstance->drawRoundRect(panel.x, panel.y, panel.w, panel.h, 6, TFT_CYAN);
 
     tftInstance->setTextDatum(TC_DATUM);
     tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
-    tftInstance->drawString("KRYONOS FIRMWARE OTA", 120, 16, 2);
+    tftInstance->drawString("KRYONOS FIRMWARE OTA", m.centerX, (int16_t)(m.header.y + 10), m.fontBody);
 
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Downloading & Flashing...", 120, 42, 2);
+    tftInstance->drawString("Downloading & Flashing...", m.centerX,
+                            (int16_t)(m.header.bottom() + 6), m.fontBody);
 
     // Main Percentage
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->drawString(String(percent) + "%", 120, 100, 6);
+    tftInstance->drawString(String(percent) + "%", m.centerX, m.listMessageY, otaBigFont(m));
 
     // Progress Bar Outline
-    int barX = 18;
-    int barY = 145;
-    int barW = 204;
-    int barH = 20;
-    tftInstance->drawRoundRect(barX, barY, barW, barH, 4, TFT_WHITE);
-    tftInstance->fillRect(barX + 2, barY + 2, barW - 4, barH - 4, TFT_BLACK);
+    const UiRect bar = otaBarRect(m);
+    tftInstance->drawRoundRect(bar.x, bar.y, bar.w, bar.h, 4, TFT_WHITE);
+    tftInstance->fillRect(bar.x + 2, bar.y + 2, bar.w - 4, bar.h - 4, TFT_BLACK);
 
     // Filled bar
-    int fillW = (percent * (barW - 4)) / 100;
+    const int fillW = (percent * (bar.w - 4)) / 100;
     if (fillW > 0) {
-        uint16_t barColor = (percent < 50) ? TFT_CYAN : TFT_GREEN;
-        tftInstance->fillRect(barX + 2, barY + 2, fillW, barH - 4, barColor);
+        const uint16_t barColor = (percent < 50) ? TFT_CYAN : TFT_GREEN;
+        tftInstance->fillRect(bar.x + 2, bar.y + 2, fillW, bar.h - 4, barColor);
     }
 
     // Byte Counter
+    const int16_t bytesY  = (int16_t)(bar.bottom() + 13);
+    const int16_t statusY = (int16_t)(bytesY + 26);
     tftInstance->setTextDatum(TC_DATUM);
     tftInstance->setTextColor(TFT_YELLOW, TFT_BLACK);
-    float currMb = currentBytes / (1024.0f * 1024.0f);
-    float totMb = totalBytes / (1024.0f * 1024.0f);
+    const float currMb = currentBytes / (1024.0f * 1024.0f);
+    const float totMb = totalBytes / (1024.0f * 1024.0f);
     char buf[64];
     sprintf(buf, "%.2f MB / %.2f MB (%.1f kB/s)", currMb, totMb, speedKBs);
-    tftInstance->drawString(buf, 120, 178, 2);
+    tftInstance->drawString(buf, m.centerX, bytesY, m.fontBody);
 
     // Status Message
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString(status.c_str(), 120, 204, 2);
+    tftInstance->drawString(status.c_str(), m.centerX, statusY, m.fontBody);
 
-    // Critical Safety Notice
+    // Critical Safety Notice, pinned above the panel's lower edge
     tftInstance->setTextColor(TFT_RED, TFT_BLACK);
-    tftInstance->drawString("DO NOT POWER OFF DEVICE", 120, 245, 2);
+    tftInstance->drawString("DO NOT POWER OFF DEVICE", m.centerX,
+                            (int16_t)(m.centerY + 85), m.fontBody);
     tftInstance->setTextColor(TFT_DARKGREY, TFT_BLACK);
-    tftInstance->drawString("Anti-rollback protection active", 120, 265, 1);
+    tftInstance->drawString("Anti-rollback protection active", m.centerX,
+                            (int16_t)(m.centerY + 105), m.fontSmall);
 }
 
 void SettingsUI::drawOTAError(const String& errorMsg) {
     otaErrorShown = true;
     if (!tftInstance) return;
 
+    const UiMetrics& m = M();
+    const UiRect panel = otaPanel(m);
+    const UiRect head = otaErrorHeader(m);
+    const UiRect card = otaErrorCard(m);
+    const UiRect retry = otaErrorRetryButton(m);
+    const UiRect back = otaErrorBackButton(m);
+
     tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(4, 4, 232, 312, 6, TFT_RED);
+    tftInstance->drawRoundRect(panel.x, panel.y, panel.w, panel.h, 6, TFT_RED);
 
     // Warning Header
-    tftInstance->fillRoundRect(10, 10, 220, 36, 5, TFT_RED);
+    tftInstance->fillRoundRect(head.x, head.y, head.w, head.h, 5, TFT_RED);
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-    tftInstance->drawString("UPDATE FAILED", 120, 28, 4);
+    tftInstance->drawString("UPDATE FAILED", head.cx(), head.cy(), otaTitleFont(m));
 
     // Error Details Card
-    tftInstance->fillRoundRect(10, 56, 220, 158, 5, 0x1800); // Deep maroon
-    tftInstance->drawRoundRect(10, 56, 220, 158, 5, TFT_RED);
+    tftInstance->fillRoundRect(card.x, card.y, card.w, card.h, 5, 0x1800); // Deep maroon
+    tftInstance->drawRoundRect(card.x, card.y, card.w, card.h, 5, TFT_RED);
 
     tftInstance->setTextDatum(TC_DATUM);
     tftInstance->setTextColor(TFT_YELLOW, 0x1800);
-    tftInstance->drawString("Error Reason:", 120, 68, 2);
+    tftInstance->drawString("Error Reason:", card.cx(), (int16_t)(card.y + 12), m.fontBody);
 
     tftInstance->setTextColor(TFT_WHITE, 0x1800);
-    // Wrap error string across lines
-    int y = 92;
+    // Wrap error string across lines, stopping short of the closing reassurance line
+    const int16_t wrapBottom = (int16_t)(card.bottom() - 44);
+    int y = card.y + 36;
     int start = 0;
-    while (start < (int)errorMsg.length() && y < 170) {
+    while (start < (int)errorMsg.length() && y < wrapBottom) {
         int lEnd = start + 26;
         if (lEnd >= (int)errorMsg.length()) lEnd = errorMsg.length();
         else {
             int space = errorMsg.lastIndexOf(' ', lEnd);
             if (space > start) lEnd = space;
         }
-        tftInstance->drawString(errorMsg.substring(start, lEnd).c_str(), 120, y, 2);
+        tftInstance->drawString(errorMsg.substring(start, lEnd).c_str(), card.cx(), y, m.fontBody);
         y += 18;
         start = lEnd;
         if (start < (int)errorMsg.length() && errorMsg[start] == ' ') start++;
     }
 
     tftInstance->setTextColor(TFT_GREEN, 0x1800);
-    tftInstance->drawString("Previous OS safe & intact.", 120, 185, 2);
+    tftInstance->drawString("Previous OS safe & intact.", card.cx(),
+                            (int16_t)(card.bottom() - 29), m.fontBody);
 
-    // Button 1: Retry (y: 224 - 264)
-    tftInstance->fillRoundRect(15, 224, 210, 38, 5, TFT_YELLOW);
+    // Button 1: Retry
+    tftInstance->fillRoundRect(retry.x, retry.y, retry.w, retry.h, 5, TFT_YELLOW);
     tftInstance->setTextColor(TFT_BLACK, TFT_YELLOW);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("RETRY UPDATE", 120, 243, 2);
+    tftInstance->drawString("RETRY UPDATE", retry.cx(), retry.cy(), m.fontBody);
 
-    // Button 2: Back / Exit (y: 272 - 310)
-    tftInstance->drawRoundRect(15, 272, 210, 36, 5, TFT_WHITE);
-    tftInstance->fillRect(16, 273, 208, 34, TFT_BLACK);
+    // Button 2: Back / Exit (outlined rather than filled)
+    tftInstance->drawRoundRect(back.x, back.y, back.w, back.h, 5, TFT_WHITE);
+    tftInstance->fillRect(back.x + 1, back.y + 1, back.w - 2, back.h - 2, TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK TO SETTINGS", 120, 290, 2);
+    tftInstance->drawString("BACK TO SETTINGS", back.cx(), back.cy(), m.fontBody);
 }
 
 void SettingsUI::drawUpdater(bool isBootCheck) {
+    const UiMetrics& m = M();
+    const UiRect frame = m.frame;
+    const UiRect dismiss = updaterDismissButton(m);
+    const UiRect install = updaterInstallButton(m);
+
     updaterIsFromBoot = isBootCheck;
     otaErrorShown = false;
     tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    
+    tftInstance->drawRoundRect(frame.x, frame.y, frame.w, frame.h, 5, TFT_WHITE);
+
     if (WiFi.status() != WL_CONNECTED) {
+        tftInstance->setTextDatum(MC_DATUM);
         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
-        tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("No WiFi Connection!", 120, 140, 2);
+        tftInstance->drawString("No WiFi Connection!", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Please turn on WiFi", 120, 160, 2);
-        tftInstance->drawString("first in Settings.", 120, 180, 2);
-        
-        tftInstance->drawRoundRect(5, 280, 230, 32, 5, TFT_WHITE);
+        tftInstance->drawString("Please turn on WiFi", m.centerX, m.centerY, m.fontBody);
+        tftInstance->drawString("first in Settings.", m.centerX, (int16_t)(m.centerY + 20), m.fontBody);
+
+        tftInstance->drawRoundRect(dismiss.x, dismiss.y, dismiss.w, dismiss.h, 5, TFT_WHITE);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString(isBootCheck ? "CLOSE" : "BACK", 120, 296, 2);
+        tftInstance->drawString(isBootCheck ? "CLOSE" : "BACK", dismiss.cx(), dismiss.cy(),
+                                m.fontBody);
         return;
     }
-    
+
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Checking for updates...", 120, 160, 2);
-    
+    tftInstance->drawString("Checking for updates...", m.centerX, m.centerY, m.fontBody);
+
     bool hasUpdate = OTAManager::checkUpdate(isBootCheck);
     const OTAUpdateInfo& info = OTAManager::getUpdateInfo();
-    
+
     if (isBootCheck && (!hasUpdate || info.fetchFailed)) {
         extern int currentState;
         currentState = 0; // STATE_LAUNCHER
@@ -1927,77 +2424,90 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
     }
 
     tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    
+    tftInstance->drawRoundRect(frame.x, frame.y, frame.w, frame.h, 5, TFT_WHITE);
+
     if (info.fetchFailed) {
         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("Failed to check", 120, 140, 2);
-        tftInstance->drawString("for updates!", 120, 160, 2);
+        tftInstance->drawString("Failed to check", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
+        tftInstance->drawString("for updates!", m.centerX, m.centerY, m.fontBody);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Check your connection", 120, 190, 2);
+        tftInstance->drawString("Check your connection", m.centerX, (int16_t)(m.centerY + 30),
+                                m.fontBody);
     } else if (!hasUpdate) {
         tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("System is up to date!", 120, 145, 2);
+        tftInstance->drawString("System is up to date!", m.centerX, (int16_t)(m.centerY - 15),
+                                m.fontBody);
         tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
-        tftInstance->drawString(String("Current: v") + KRYONOS_VERSION, 120, 170, 2);
+        tftInstance->drawString(String("Current: v") + KRYONOS_VERSION, m.centerX,
+                                (int16_t)(m.centerY + 10), m.fontBody);
     } else {
         tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
         tftInstance->setTextDatum(TC_DATUM);
-        tftInstance->drawString(info.updateType.c_str(), 120, 10, 2);
-        
+        tftInstance->drawString(info.updateType.c_str(), m.centerX,
+                                (int16_t)(m.header.y + 4), m.fontBody);
+
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString(String("v") + KRYONOS_VERSION + " -> v" + info.version, 120, 28, 2);
-        
-        int y = 48;
+        tftInstance->drawString(String("v") + KRYONOS_VERSION + " -> v" + info.version, m.centerX,
+                                (int16_t)(m.header.y + 22), m.fontBody);
+
+        // Text flows down from the header and must stop above the install chip. When a guide is
+        // present the changelog gets the upper half and the guide the lower.
+        const bool hasGuide = info.guide.length() > 0;
+        const int16_t installTop = install.y;
+        const int16_t maxChangelogY = (int16_t)(hasGuide ? installTop - 94 : installTop - 49);
+        const int16_t maxGuideY = (int16_t)(installTop - 29);
+
+        int y = m.header.bottom() + 12;
         tftInstance->setTextColor(TFT_YELLOW, TFT_BLACK);
         tftInstance->setTextDatum(TL_DATUM);
-        tftInstance->drawString("What's New:", 15, y, 2); y += 15;
-        
+        tftInstance->drawString("What's New:", (int16_t)(m.list.x + 5), y, m.fontBody); y += 15;
+
         tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
         int start = 0;
-        int maxChangelogY = (info.guide.length() > 0) ? 140 : 185;
         while (start < (int)info.changelog.length() && y < maxChangelogY) {
             int nl = info.changelog.indexOf('\n', start);
             String line;
             if (nl == -1) { line = info.changelog.substring(start); start = info.changelog.length(); }
             else { line = info.changelog.substring(start, nl); start = nl + 1; }
-            
+
             int lStart = 0;
-            while(lStart < (int)line.length() && y < maxChangelogY) {
+            while (lStart < (int)line.length() && y < maxChangelogY) {
                 int lEnd = lStart + 30;
-                if(lEnd >= (int)line.length()) lEnd = line.length();
-                else { int space = line.lastIndexOf(' ', lEnd); if(space > lStart) lEnd = space; }
-                tftInstance->drawString(line.substring(lStart, lEnd).c_str(), 15, y, 2);
+                if (lEnd >= (int)line.length()) lEnd = line.length();
+                else { int space = line.lastIndexOf(' ', lEnd); if (space > lStart) lEnd = space; }
+                tftInstance->drawString(line.substring(lStart, lEnd).c_str(),
+                                        (int16_t)(m.list.x + 5), y, m.fontBody);
                 y += 14;
                 lStart = lEnd;
-                if(lStart < (int)line.length() && line[lStart]==' ') lStart++;
+                if (lStart < (int)line.length() && line[lStart] == ' ') lStart++;
             }
         }
-        
+
         // Render Guide if present and non-empty
-        if (info.guide.length() > 0) {
+        if (hasGuide) {
             y += 4;
             tftInstance->setTextColor(TFT_YELLOW, TFT_BLACK);
-            tftInstance->drawString("How to Install:", 15, y, 2); y += 14;
+            tftInstance->drawString("How to Install:", (int16_t)(m.list.x + 5), y, m.fontBody); y += 14;
             tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
             int gStart = 0;
-            while (gStart < (int)info.guide.length() && y < 205) {
+            while (gStart < (int)info.guide.length() && y < maxGuideY) {
                 int nl = info.guide.indexOf('\n', gStart);
                 String line;
                 if (nl == -1) { line = info.guide.substring(gStart); gStart = info.guide.length(); }
                 else { line = info.guide.substring(gStart, nl); gStart = nl + 1; }
-                
+
                 int lStart = 0;
-                while(lStart < (int)line.length() && y < 205) {
+                while (lStart < (int)line.length() && y < maxGuideY) {
                     int lEnd = lStart + 30;
-                    if(lEnd >= (int)line.length()) lEnd = line.length();
-                    else { int space = line.lastIndexOf(' ', lEnd); if(space > lStart) lEnd = space; }
-                    tftInstance->drawString(line.substring(lStart, lEnd).c_str(), 15, y, 2);
+                    if (lEnd >= (int)line.length()) lEnd = line.length();
+                    else { int space = line.lastIndexOf(' ', lEnd); if (space > lStart) lEnd = space; }
+                    tftInstance->drawString(line.substring(lStart, lEnd).c_str(),
+                                            (int16_t)(m.list.x + 5), y, m.fontBody);
                     y += 14;
                     lStart = lEnd;
-                    if(lStart < (int)line.length() && line[lStart]==' ') lStart++;
+                    if (lStart < (int)line.length() && line[lStart] == ' ') lStart++;
                 }
             }
         }
@@ -2008,33 +2518,39 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
             float szMb = info.firmwareSize / (1024.0f * 1024.0f);
             char szBuf[32];
             sprintf(szBuf, "Firmware Size: %.2f MB", szMb);
-            tftInstance->drawString(szBuf, 15, y, 2);
+            tftInstance->drawString(szBuf, (int16_t)(m.list.x + 5), y, m.fontBody);
         }
 
         // INSTALL UPDATE Button (only if board supports OTA)
         if (info.supportsOta) {
-            tftInstance->fillRoundRect(10, 234, 220, 36, 5, TFT_GREEN);
-            tftInstance->drawRoundRect(10, 234, 220, 36, 5, TFT_WHITE);
+            tftInstance->fillRoundRect(install.x, install.y, install.w, install.h, 5, TFT_GREEN);
+            tftInstance->drawRoundRect(install.x, install.y, install.w, install.h, 5, TFT_WHITE);
             tftInstance->setTextColor(TFT_BLACK, TFT_GREEN);
             tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString("INSTALL UPDATE", 120, 252, 2);
+            tftInstance->drawString("INSTALL UPDATE", install.cx(), install.cy(), m.fontBody);
         }
     }
-    
+
     // Bottom Dismiss Button
-    tftInstance->drawRoundRect(10, 278, 220, 32, 5, TFT_WHITE);
-    tftInstance->fillRect(11, 279, 218, 30, TFT_BLACK);
+    tftInstance->drawRoundRect(dismiss.x, dismiss.y, dismiss.w, dismiss.h, 5, TFT_WHITE);
+    tftInstance->fillRect(dismiss.x + 1, dismiss.y + 1, dismiss.w - 2, dismiss.h - 2, TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString(isBootCheck ? "CLOSE" : "BACK", 120, 294, 2);
+    tftInstance->drawString(isBootCheck ? "CLOSE" : "BACK", dismiss.cx(), dismiss.cy(), m.fontBody);
 }
 
 void SettingsUI::handleUpdaterTouch(uint16_t x, uint16_t y) {
     extern int currentState;
 
+    const UiMetrics& m = M();
+    const UiRect retry = otaErrorRetryButton(m);
+    const UiRect back = otaErrorBackButton(m);
+    const UiRect install = updaterInstallButton(m);
+    const UiRect dismiss = updaterDismissButton(m);
+
     if (otaErrorShown) {
-        // Retry button (y: 224 - 264)
-        if (y >= 224 && y <= 264 && x >= 15 && x <= 225) {
+        // Retry button
+        if (retry.contains((int16_t)x, (int16_t)y)) {
             otaErrorShown = false;
             const OTAUpdateInfo& info = OTAManager::getUpdateInfo();
             drawOTAProgress(0, 0, info.firmwareSize, 0, "Reconnecting...");
@@ -2047,8 +2563,8 @@ void SettingsUI::handleUpdaterTouch(uint16_t x, uint16_t y) {
             }
             return;
         }
-        // Back to settings button (y: 272 - 310)
-        if (y >= 270 && y <= 312 && x >= 15 && x <= 225) {
+        // Back to settings button
+        if (back.contains((int16_t)x, (int16_t)y)) {
             otaErrorShown = false;
             currentState = updaterIsFromBoot ? 0 : 1;
             return;
@@ -2059,7 +2575,7 @@ void SettingsUI::handleUpdaterTouch(uint16_t x, uint16_t y) {
     const OTAUpdateInfo& info = OTAManager::getUpdateInfo();
 
     // 1. "INSTALL UPDATE" Button (only if supports_ota is true)
-    if (info.hasUpdate && info.supportsOta && y >= 230 && y <= 272 && x >= 10 && x <= 230) {
+    if (info.hasUpdate && info.supportsOta && install.contains((int16_t)x, (int16_t)y)) {
         drawOTAProgress(0, 0, info.firmwareSize, 0, "Initializing Flash Stream...");
         bool success = OTAManager::startFlashUpdate([](const OTAProgress& p) {
             SettingsUI::drawOTAProgress(p.percent, p.downloadedBytes, p.totalBytes, p.speedKBs, p.statusMessage);
@@ -2072,7 +2588,7 @@ void SettingsUI::handleUpdaterTouch(uint16_t x, uint16_t y) {
     }
 
     // 2. "BACK / CLOSE" Button
-    if (y >= 274 && y <= 314 && x >= 10 && x <= 230) {
+    if (dismiss.contains((int16_t)x, (int16_t)y)) {
         if (updaterIsFromBoot) {
             currentState = 0; // STATE_LAUNCHER
         } else {

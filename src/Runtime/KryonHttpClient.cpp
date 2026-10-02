@@ -1,11 +1,13 @@
-#include "NetworkClient.h"
+#include "KryonHttpClient.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Kernel/Services/Network/TLSHelper.h"
 #include <HTTPClient.h>
+// WiFi.h must be explicit: on Arduino core 3.x, WiFiClientSecure.h no longer pulls it in.
+#include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_task_wdt.h>
 
-HttpResponse NetworkClient::request(const String& method, const String& url, const String& body, 
+HttpResponse KryonHttpClient::request(const String& method, const String& url, const String& body, 
                                     const std::map<String, String>& headers, uint32_t timeoutMs) {
     HttpResponse response;
     response.status = 0;
@@ -75,7 +77,7 @@ HttpResponse NetworkClient::request(const String& method, const String& url, con
     return response;
 }
 
-bool NetworkClient::downloadFile(const String& url, const String& destPath, 
+bool KryonHttpClient::downloadFile(const String& url, const String& destPath, 
                                  std::function<void(size_t, size_t)> progressCallback, 
                                  uint32_t timeoutMs) {
     if (WiFi.status() != WL_CONNECTED) {
@@ -107,7 +109,8 @@ bool NetworkClient::downloadFile(const String& url, const String& destPath,
     }
 
     size_t totalBytes = (size_t)http.getSize();
-    WiFiClient* stream = http.getStreamPtr();
+    // auto: on core 2.x this is WiFiClient*, on core 3.x NetworkClient*.
+    auto* stream = http.getStreamPtr();
     if (!stream) {
         http.end();
         return false;

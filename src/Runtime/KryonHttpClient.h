@@ -1,5 +1,5 @@
-#ifndef NETWORK_CLIENT_H
-#define NETWORK_CLIENT_H
+#ifndef KRYON_HTTP_CLIENT_H
+#define KRYON_HTTP_CLIENT_H
 
 #include <Arduino.h>
 #include <map>
@@ -11,7 +11,7 @@ struct HttpResponse {
     String error;
 };
 
-class NetworkClient {
+class KryonHttpClient {
 public:
     static HttpResponse request(const String& method, const String& url, const String& body, 
                                 const std::map<String, String>& headers, uint32_t timeoutMs = 8000);
@@ -21,4 +21,4 @@ public:
                              uint32_t timeoutMs = 15000);
 };
 
-#endif // NETWORK_CLIENT_H
+#endif // KRYON_HTTP_CLIENT_H
