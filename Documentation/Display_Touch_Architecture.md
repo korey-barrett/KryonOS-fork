@@ -245,6 +245,33 @@ the framebuffer itself.
 > translation unit elsewhere — the same way a board file compiles to nothing when its `TARGET_*` guard
 > is false. Any new backend must carry an equivalent guard around its target-specific includes.
 
+### 2.6 The TCA9554 expander is its own module
+
+`src/Hal/I2C/Tca9554.{h,cpp}` owns the board's I²C GPIO expander, because the display is no longer its
+only user. Three signals this board needs are not on the SoC and all three live on that chip: the
+ST7701's reset (`LCD_RST`), the touch controller's reset (`TP_RST`), and the chip select of the 3-wire
+bus the panel takes its init sequence over. The micro-SD socket's chip select is on it too, and is
+left alone.
+
+The reason it is a **class** and not a byte of constants is the output latch. The chip has exactly one
+(register `0x01`), and it now has two independent callers: the display backend asserts the command-bus
+chip select while it clocks out the init table, and the touch path pulses `TP_RST` before every probe.
+A caller that recomputes the whole byte from its own idea of the other bits clobbers the other's pin —
+a literal `0x0B` written for the chip select drops a `TP_RST` the touch path had just released. So
+every write goes through the object's shadow of the latch, and this class is the only sanctioned
+writer of that register.
+
+`boardExpander()` returns the one shared instance. It is a **function-local static**, not a
+namespace-scope object, and that is deliberate: a global with a constructor emits an `.init_array`
+entry, which the SDK's linker script keeps, so the object would be linked into every environment
+whether or not it uses the chip. With the function-local static, an environment that never calls
+`boardExpander()` drops the whole translation unit under `--gc-sections`.
+
+The module carries the board's pin assignments (bit 0 `LCD_RST`, 1 `TP_RST`, 2 `LCD_CS`, 3 `SD_CS`,
+7 buzzer; the wiki's `EXIO<n>` is bit `n-1`) and its masks, so they are defined once. `EspLcdRgbDisplay`
+now holds none of them — `setUpExpander()` calls `boardExpander().begin(15, 7)` and `pulseLcdReset()`,
+and the init table goes out under `boardExpander().setCommandCsAsserted(...)`.
+
 ---
 
 ## 3. Touch: how the driver is chosen
@@ -285,7 +312,7 @@ The drivers live in `src/Hal/Touch/`:
 | `Xpt2046BitbangDriver.{h,cpp}` | Four-GPIO bit-banged XPT2046 (the historical implementation). |
 | `Xpt2046TftDriver.{h,cpp}` | XPT2046 via TFT_eSPI's own touch path. |
 | `NullTouchDriver.h` | No panel; reports no touch. |
-| `CapacitiveTouchDriver.{h,cpp}` | FT6236 / GT911 / CST816 over I²C. **Untested against real panels.** |
+| `CapacitiveTouchDriver.{h,cpp}` | FT6236 / GT911 / CST816 over I²C. The CST816 path is selected by the Waveshare 2.1B, whose CST820 answers to the same map; none of the three has been run against a real panel yet. |
 
 Selection is the string build flag `KRYONOS_TOUCH_DRIVER`. Left unset it is `auto`, which reproduces
 the old compile-time ladder exactly — so every pre-existing board keeps the driver it already used
@@ -300,14 +327,42 @@ without setting anything:
 Naming a driver explicitly overrides that, e.g. `-D KRYONOS_TOUCH_DRIVER=\"ft6236\"`. Naming one the
 board has no pins for (or an unknown name) falls back to `null` with a warning rather than reading
 unconnected pins, so a typo cannot turn into phantom touches. Capacitive controllers additionally
-need `KRYONOS_TOUCH_I2C_SDA` / `_SCL` (and `KRYONOS_TOUCH_RST_PIN` if the reset line is wired);
-without the bus pins the driver stays absent and reports no touch.
+need `KRYONOS_TOUCH_I2C_SDA` / `_SCL`; without the bus pins the driver stays absent and reports no
+touch.
 
-The capacitive drivers are complete register-level implementations, but **no board in this repo
-carries such a panel yet, so they have not been validated on hardware.** They compile, they probe the
-bus, and they report "no touch" cleanly when nothing answers — selecting one cannot break a board
-that lacks the hardware. Treat their register maps as documentation to check against your panel's
-datasheet.
+`KRYONOS_TOUCH_RST_PIN` is for a reset line wired to a **SoC GPIO** — it is driven directly. A
+controller whose reset hangs off an I/O expander instead leaves it undefined and lets the board pulse
+through the expander: the Waveshare 2.1B's `TP_RST` is EXIO2 on the TCA9554, so defining the macro
+there would drive a pin nothing is connected to. Its environment therefore names the bus pins only.
+
+The capacitive drivers are complete register-level implementations, but **none of them has been
+validated against a real panel yet.** They compile, they probe the bus, and they report "no touch"
+cleanly when nothing answers — selecting one cannot break a board that lacks the hardware. Treat their
+register maps as documentation to check against your panel's datasheet.
+
+### 3.2a The touch reset, and why it is pulsed late
+
+`I2cTouchDriver::begin()` resets the controller **immediately before it probes** rather than during
+display bring-up, and that ordering is load-bearing for the Waveshare 2.1B. Its CST820 drops into a
+low-power state between touches and stops acknowledging I²C while it is there — measured on the
+reference port for this board as 0/20 ACKs asleep against 20/20 awake, with the expander on the same
+bus answering throughout. By the time touch init runs, the web server and the UI have come up, so a
+pulse issued during panel bring-up has long expired and the probe fails on a controller that is
+present, wired and healthy.
+
+Three consequences worth keeping in mind when editing that function:
+
+- The pulse must not move earlier, and a **second** pulse is not redundant. `begin()` runs twice per
+  boot — `main.cpp`'s `TouchDriver::init()`, then `TouchCalibrator::init()` — and the second one also
+  recovers a controller that fell asleep while the UI was being constructed.
+- The probe **retries** (five attempts, 20 ms apart). One read can land inside the controller's
+  wake-up window, and the second `begin()` runs on a busier bus than the first.
+- A failed re-probe must **never** clear a success. An earlier answer is proof the part is present, so
+  a flaky second read would otherwise turn into touch that is dead for the rest of the session.
+
+Where the reset lives is board-specific: the driver reaches it through `boardExpander()` under a
+`TARGET_WAVESHARE_S3_LCD21B` guard, mirroring how the shipped v2.0.0 port gates its board hook. The
+expander itself is `src/Hal/I2C/Tca9554.{h,cpp}`, described in §2.6.
 
 ### 3.3 Mapping raw → pixels, and calibration
 

@@ -37,14 +37,17 @@ static EspLcdRgbDisplay s_display(KRYONOS_DISPLAY_WIDTH, KRYONOS_DISPLAY_HEIGHT,
 KryonDisplay& tft = s_display;
 
 // Capabilities
-// Touch is deliberately not wired yet: it is the follow-up to this display bring-up. Reporting it as
-// absent keeps any future "this screen is touchable" UI from claiming otherwise.
-bool hasTouch(void) { return false; }
+// Touch is live: the panel carries a CST820 on the shared I2C bus, driven by the CST816 driver (see
+// CapacitiveTouchDriver.h for why the two parts share a register map). Nothing in src/ actually reads
+// this function today -- the real switch is the KRYONOS_TOUCH_* set in platformio.ini -- so this is
+// the board contract and the docs telling the truth rather than a gate that enables input.
+bool hasTouch(void) { return true; }
 bool hasKeyboard(void) { return false; }
 bool hasBattery(void) { return false; }
 
-// Touch Interface. TouchDriver auto-detects to the null driver because no TOUCH_* pin macro is
-// defined for this environment, so these all report "not touched" without doing any I2C work.
+// Touch Interface. TouchDriver resolves to the CST816 driver here because platformio.ini names it and
+// gives it the bus pins; the controller's reset is pulsed by that driver, immediately before it
+// probes (see CapacitiveTouchDriver.cpp -- a pulse during display bring-up is too early to matter).
 bool isTouched(void) {
     uint16_t x, y;
     return TouchDriver::getTouch(&x, &y);
@@ -86,6 +89,12 @@ void initDisplay(void) {
     tft.present();
 }
 
+// Board.h declares this and every board defines it, but nothing on the live boot path calls it --
+// main.cpp does Display::begin() then TouchDriver::init(&tft) directly, and the latter is what
+// actually brings touch up (including the TP_RST pulse, which lives in the driver). Kept so the
+// Board.h contract stays satisfied, and so it would still be correct if the lifecycle were ever
+// wired up; it deliberately does NOT pulse the reset, because a pulse here would never run and
+// implying touch depends on this function is how a future reader gets misled.
 void initTouch(void) {
     Serial.println("[Board Waveshare S3 LCD2.1B] Initializing TouchDriver...");
     TouchDriver::init(&tft);

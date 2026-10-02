@@ -9,11 +9,12 @@
 // ---------------------------------------------------------------------------------------------
 // Capacitive (I2C) touch controllers.
 //
-// STATUS: these are complete register-level implementations, but they have NOT been validated
-// against real panels — no board in this repo carries one yet. They compile, they probe the bus,
-// and they report "no touch" cleanly when the controller does not answer, so selecting one cannot
-// break a board that lacks the hardware. Treat the register maps as documentation to verify
-// against your panel's datasheet + the vendor's own driver, not as proven code.
+// STATUS: complete register-level implementations. The CST816 path is what the Waveshare 2.1B
+// selects (its CST820 answers to the same map — see the note on Cst816Driver below), and none of
+// these has been run against a real panel yet. They compile, they probe the bus, and they report
+// "no touch" cleanly when the controller does not answer, so selecting one cannot break a board that
+// lacks the hardware. Treat the register maps as documentation to verify against your panel's
+// datasheet + the vendor's own driver, not as proven code.
 //
 // Unlike the resistive path, these report absolute pixel coordinates, so they need no calibration:
 // needsCalibration() is false, the OS skips the calibration screen, and /touch_cal_p.bin is unused.
@@ -22,7 +23,11 @@
 //   KRYONOS_TOUCH_I2C_SDA / KRYONOS_TOUCH_I2C_SCL  — bus pins; without them begin() is a no-op and
 //                                                    the driver stays absent.
 //   KRYONOS_TOUCH_I2C_ADDR                         — override the default 7-bit address.
-//   KRYONOS_TOUCH_RST_PIN / KRYONOS_TOUCH_IRQ_PIN  — reset line and (unused) interrupt line.
+//   KRYONOS_TOUCH_RST_PIN / KRYONOS_TOUCH_IRQ_PIN  — reset line and (unused) interrupt line. The
+//                                                    reset macro drives a SoC GPIO directly, so a
+//                                                    controller whose reset hangs off an I/O
+//                                                    expander leaves it undefined and is pulsed by
+//                                                    the board instead (the Waveshare 2.1B).
 // ---------------------------------------------------------------------------------------------
 
 class I2cTouchDriver : public ITouchDriver {

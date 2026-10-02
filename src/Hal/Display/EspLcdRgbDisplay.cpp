@@ -8,6 +8,7 @@
 #include <esp_heap_caps.h>
 
 #include "Hal/I2C/I2CEngine.h"
+#include "Hal/I2C/Tca9554.h"
 
 // The whole implementation is compiled only where ESP-IDF ships the RGB panel driver, matching the
 // guard in the header. For every other environment this translation unit is empty: PlatformIO
@@ -34,25 +35,16 @@ namespace {
 constexpr int kCmdSdaPin = 1;
 constexpr int kCmdSclPin = 2;
 
-// I2C is shared by the TCA9554 expander (now) and the CST820 touch controller (a follow-up). The bus
-// also carries the QMI8658 IMU (0x51), the PCF85063 RTC (0x6B) and one unidentified 0x7E device, so
-// a scan at boot reports five addresses; only 0x20 matters here.
+// The I2C bus is shared by the TCA9554 expander and the CST820 touch controller, whose pins and bit
+// assignments live in Hal/I2C/Tca9554.h. The touch path opens the same bus from
+// KRYONOS_TOUCH_I2C_SDA/SCL, which platformio.ini defines as this same pair -- I2CEngine::begin
+// returns true for a bus already up on matching pins and refuses one on different pins, so a
+// divergence between the two spellings fails loudly instead of quietly re-initializing.
+//
+// The rest of the bus carries the QMI8658 IMU (0x51), the PCF85063 RTC (0x6B) and one unidentified
+// 0x7E device, so a scan at boot reports five addresses; only 0x20 matters to this backend.
 constexpr int kI2cSdaPin = 15;
 constexpr int kI2cSclPin = 7;
-
-constexpr uint8_t kExpanderAddr = 0x20;
-
-// TCA9554 registers: 0x01 = output latch, 0x03 = direction (1 = input).
-constexpr uint8_t kRegOutput = 0x01;
-constexpr uint8_t kRegConfig = 0x03;
-
-// Vendor masks (board_devices.yaml): outputs on pins 0,1,2,3,7; inputs on 4,5,6; output levels
-// 1,1,1,1,0. Pin 0 = LCD_RST, pin 1 = TP_RST, pin 2 = the ST7701 command-bus chip select.
-constexpr uint8_t kDirConfig = 0x70; // pins 4,5,6 are inputs
-constexpr uint8_t kOutIdle = 0x0F;   // LCD_RST=1 TP_RST=1 SPI_CS=1 ... pin7=0
-constexpr uint8_t kOutReset = 0x0E;  // LCD_RST=0
-constexpr uint8_t kOutTpReset = 0x0D; // TP_RST=0
-constexpr uint8_t kOutCsLow = 0x0B;  // SPI_CS=0
 
 // --- Backlight ----------------------------------------------------------------------------------
 constexpr uint32_t kBacklightFreq = 25000;
@@ -151,9 +143,9 @@ constexpr uint8_t kPrefixColmod[1] = {0x50};
 
 inline uint16_t bswap16(uint16_t v) { return static_cast<uint16_t>((v >> 8) | (v << 8)); }
 
-bool csWrite(uint8_t level) { return I2CEngine::writeReg(kExpanderAddr, kRegOutput, level); }
-
-void cmdBusIdle() {
+// GPIO1/GPIO2, the command bus's own pins. Not to be confused with the expander's chip select,
+// which is a TCA9554 output bit and is asserted through boardExpander().
+void cmdBusPinsIdle() {
     pinMode(kCmdSdaPin, OUTPUT);
     pinMode(kCmdSclPin, OUTPUT);
     digitalWrite(kCmdSdaPin, LOW);
@@ -324,72 +316,36 @@ bool EspLcdRgbDisplay::setUpCanvas() {
 }
 
 bool EspLcdRgbDisplay::setUpExpander() {
-    if (!I2CEngine::begin(kI2cSdaPin, kI2cSclPin, 400000)) {
-        // I2CEngine rejects a bus on a pin any TFT_*/TOUCH_* macro claims, so this is the message
-        // that appears if a pin macro is ever added to this environment by mistake.
-        lastError_ = "I2C bus init failed on SDA=15 / SCL=7";
+    // The expander itself lives in Hal/I2C/Tca9554.h: the touch controller's reset hangs off the same
+    // chip, so this backend is one of two callers rather than its owner. begin() is idempotent, so if
+    // display init ever ran twice it would not re-pulse a reset under the running panel.
+    if (!boardExpander().begin(kI2cSdaPin, kI2cSclPin)) {
+        lastError_ = boardExpander().lastError();
         return false;
     }
 
-    // The expander can need a moment after the rail settles.
-    bool found = false;
-    for (int attempt = 0; attempt < 8 && !found; attempt++) {
-        found = I2CEngine::ping(kExpanderAddr);
-        if (!found) delay(25);
-    }
-    if (!found) {
-        lastError_ = "no TCA9554 expander at 0x20";
+    // Only the panel's own reset belongs here. TP_RST is the touch controller's, and the touch path
+    // pulses it immediately before its probe instead of at this point in boot -- the CST820 falls
+    // asleep and stops acknowledging I2C long before touch init runs, so a pulse issued here would
+    // have expired by the time it was needed. It stays released (the idle level) until then.
+    //
+    // The panel's own reset GPIO is -1 in the vendor config, so this expander pin is the only reset
+    // the ST7701 gets.
+    if (!boardExpander().pulseLcdReset()) {
+        lastError_ = "could not reset the ST7701 over the TCA9554";
         return false;
     }
-
-    if (!I2CEngine::writeReg(kExpanderAddr, kRegConfig, kDirConfig)) {
-        lastError_ = "could not set the TCA9554 pin directions";
-        return false;
-    }
-    if (!I2CEngine::writeReg(kExpanderAddr, kRegOutput, kOutIdle)) {
-        lastError_ = "could not raise the TCA9554 outputs";
-        return false;
-    }
-
-    // Both resets hang off the expander, and both are driven low then released. The touch
-    // controller is reset first, matching the vendor board code. It is not exercised in this pass --
-    // no TOUCH_* macro is defined, so TouchDriver stays on its null driver -- but leaving it held in
-    // reset while the panel comes up would be wrong, and the follow-up touch pass needs this pulse
-    // anyway. Only the expander is written here; the touch chip takes no I2C traffic yet.
-    if (!I2CEngine::writeReg(kExpanderAddr, kRegOutput, kOutTpReset)) {
-        lastError_ = "could not assert the touch controller reset line";
-        return false;
-    }
-    delay(10);
-    if (!I2CEngine::writeReg(kExpanderAddr, kRegOutput, kOutIdle)) {
-        lastError_ = "could not release the touch controller reset line";
-        return false;
-    }
-    delay(10);
-
-    // Panel reset (the panel's own reset GPIO is -1 in the vendor config). Timing matches both the
-    // vendor board code and the ST7701 driver's own hardware-reset path: 10 ms low, then 120 ms of
-    // settle before the first command.
-    if (!I2CEngine::writeReg(kExpanderAddr, kRegOutput, kOutReset)) {
-        lastError_ = "could not assert the ST7701 reset line";
-        return false;
-    }
-    delay(10);
-    if (!I2CEngine::writeReg(kExpanderAddr, kRegOutput, kOutIdle)) {
-        lastError_ = "could not release the ST7701 reset line";
-        return false;
-    }
-    delay(120);
 
     return true;
 }
 
 bool EspLcdRgbDisplay::sendInitTable() {
-    cmdBusIdle();
+    cmdBusPinsIdle();
 
     // The chip select is asserted once, here, and held for the whole sequence. If this write fails
-    // there is no point clocking anything out -- the panel would ignore all of it.
-    if (!csWrite(kOutCsLow)) {
+    // there is no point clocking anything out -- the panel would ignore all of it. It goes through
+    // the expander's shadow rather than a literal byte so it cannot clobber a bit another caller owns.
+    if (!boardExpander().setCommandCsAsserted(true)) {
         cmdBusRelease();
         lastError_ = "could not assert the 3-wire chip select";
         return false;
@@ -407,7 +363,7 @@ bool EspLcdRgbDisplay::sendInitTable() {
 
     // Release the select, then the pins themselves: the board's SD slot shares GPIO1/GPIO2 and can
     // only claim them once this sequence is finished with them.
-    bool released = csWrite(kOutIdle);
+    bool released = boardExpander().setCommandCsAsserted(false);
     cmdBusRelease();
     if (!released) {
         lastError_ = "could not release the 3-wire chip select";

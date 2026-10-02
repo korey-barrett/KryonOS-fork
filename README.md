@@ -137,7 +137,7 @@
       <td>ESP32-S3</td>
       <td>16MB Flash, 8MB Octal PSRAM</td>
       <td>ST7701 480x480 RGB Parallel</td>
-      <td>Not wired yet (CST816S planned)</td>
+      <td>CST820 capacitive (I2C)</td>
     </tr>
     <tr>
       <td><strong>M5Stack Cardputer v1.1</strong></td>

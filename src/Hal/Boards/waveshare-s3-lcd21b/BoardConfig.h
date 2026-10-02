@@ -2,7 +2,7 @@
 #define WAVESHARE_S3_LCD21B_BOARD_CONFIG_H
 
 // Board profile for the Waveshare ESP32-S3-Touch-LCD-2.1B: an ESP32-S3 with a 480x480 ST7701 panel
-// on an RGB565 PARALLEL bus, plus a CST816S capacitive touch controller.
+// on an RGB565 PARALLEL bus, plus a CST820 capacitive touch controller.
 //
 // This board is deliberately unlike the three chip defaults. It does NOT drive its panel with
 // TFT_eSPI -- an RGB parallel panel has no SPI pixel path, so TFT_eSPI cannot drive it at all.
@@ -34,22 +34,28 @@
 // it needs no pin macro here. BoardConfig.cpp passes it to the backend's constructor.
 
 // --- Touch ------------------------------------------------------------------------------------
-// Intentionally NO TOUCH_* macros. Touch is not wired in this pass, and defining the XPT2046
-// TOUCH_CS/CLK/DIN/DO/IRQ quartet would leave KRYONOS_TOUCH_DRIVER auto-detecting a resistive
-// controller that is not there. The panel's real controller is a CST816S on I2C SDA=15 / SCL=7
-// (reset on the TCA9554 expander); select it from platformio.ini when it is brought up.
+// Still intentionally NO TOUCH_* macros, and that is not a leftover. The XPT2046 quartet has no
+// meaning here, and worse, I2CEngine::begin() refuses to open a bus on any pin a TFT_* or TOUCH_*
+// macro claims -- so a stray TOUCH_DIN=15 would silently kill the very I2C bus the touch controller
+// and the expander both live on.
 //
-// Note for that follow-up: the XPT2046 pins must STAY undefined. I2CEngine::begin() refuses to open
-// a bus whose pins match any TFT_* or TOUCH_* macro, so a stray TOUCH_DIN=15 would silently kill the
-// I2C bus the touch controller and the expander both live on.
+// Touch is selected the supported way instead, from platformio.ini:
+//   -D KRYONOS_TOUCH_DRIVER=\"cst816\" -D KRYONOS_TOUCH_I2C_SDA=15 -D KRYONOS_TOUCH_I2C_SCL=7
+// This board's controller is a CST820, which answers to the CST816S register map; see
+// Hal/Touch/CapacitiveTouchDriver.h.
+//
+// There is deliberately NO TOUCH_RST_PIN either: the controller's reset is EXIO2 on the TCA9554
+// expander, not a SoC pin, so the macro would drive a pin nothing is connected to. The driver pulses
+// it through boardExpander() immediately before each probe, which is the only moment that works.
 
 // --- Panel wiring (documentation; the backend holds the real values) --------------------------
 //   ST7701 RGB data[16] = {5,45,48,47,21,14,13,12,11,10,9,46,3,8,18,17}
 //   DE=40  PCLK=41  VSYNC=39  HSYNC=38   backlight=6
 //   Command bus (init only): SCL=2 SDA=1, CS on TCA9554 bit 2
-//   TCA9554 at 0x20: LCD_RST=bit0  TP_RST=bit1  SPI_CS=bit2
+//   TCA9554 at 0x20: LCD_RST=bit0  TP_RST=bit1  SPI_CS=bit2  SD_CS=bit3  buzzer=bit7
 //   I2C for expander + touch: SDA=15 SCL=7
-//   Touch INT=16 (unused: the CST816 driver polls)
+//   Touch INT=16 (unused: the CST816 driver reads ungated, which is what wakes a sleeping part)
+//   Bit assignments live in Hal/I2C/Tca9554.h, which is the one place they are defined.
 
 #endif // TARGET_WAVESHARE_S3_LCD21B
 

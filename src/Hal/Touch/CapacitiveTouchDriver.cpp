@@ -3,6 +3,10 @@
 #include "Hal/Display/Display.h"
 #include "Hal/I2C/I2CEngine.h"
 
+#if defined(TARGET_WAVESHARE_S3_LCD21B)
+#include "Hal/I2C/Tca9554.h"
+#endif
+
 #include <Arduino.h>
 
 // --- Optional wiring, resolved once -----------------------------------------------------------
@@ -40,13 +44,58 @@ void I2cTouchDriver::begin(KryonDisplay* display) {
 #ifdef KRYONOS_TOUCH_I2C_ADDR
     address_ = KRYONOS_TOUCH_I2C_ADDR;
 #endif
+    // The GPIO reset path. A controller whose reset hangs off an I/O expander instead has no
+    // KRYONOS_TOUCH_RST_PIN and is handled by the board block below; this stays a no-op there.
     i2cTouchReset();
 
     if (!I2CEngine::isInitialized()) {
         I2CEngine::begin(KRYONOS_TOUCH_I2C_SDA, KRYONOS_TOUCH_I2C_SCL);
     }
 
-    present_ = probe();
+#if defined(TARGET_WAVESHARE_S3_LCD21B)
+    // This board's TP_RST is not a SoC pin, so the reset above cannot reach it -- it is EXIO2 on the
+    // TCA9554 expander, which is also why this environment defines no TOUCH_RST_PIN macro (that macro
+    // would drive a pin nothing is connected to).
+    //
+    // The pulse has to happen HERE, immediately before the probe, and not during display bring-up.
+    // The CST820 drops into a low-power state between touches and stops acknowledging I2C while it is
+    // there -- the reference port for this board measured 0/20 ACKs asleep against 20/20 awake, with
+    // the expander on the same bus answering perfectly throughout. By the time this runs, a web
+    // server and the whole UI have come up, so the controller has long since gone to sleep and a
+    // pulse issued minutes earlier during panel bring-up is worthless: the probe below then fails on
+    // a controller that is present, wired and entirely healthy.
+    //
+    // This runs twice per boot -- once from main.cpp's TouchDriver::init(), again from
+    // TouchCalibrator::init() -- which is harmless and useful: the second pulse also recovers a
+    // controller that went to sleep while the UI was being constructed. The pulse costs 100 ms, twice.
+    if (!boardExpander().begin(KRYONOS_TOUCH_I2C_SDA, KRYONOS_TOUCH_I2C_SCL) ||
+        !boardExpander().pulseTouchReset()) {
+        Serial.printf("[TOUCH] TCA9554 TP_RST pulse failed (%s); probing anyway\n",
+                      boardExpander().lastError());
+    }
+#endif
+
+    // Retry, rather than one shot: the controller needs a moment to come up after that pulse, and a
+    // lone read landing inside the wake-up window fails on a healthy part. The reference needs five
+    // attempts spaced 20 ms, and the second call is the harder one -- the RGB panel is already
+    // scanning and the radio is up, so the bus is busier than it was at the first.
+    bool up = false;
+    for (int attempt = 0; attempt < 5 && !up; attempt++) {
+        if (attempt) delay(20);
+        up = probe();
+    }
+
+    // A failed re-probe must never disarm a controller that already answered. begin() runs twice per
+    // boot, and an earlier success is proof the part is present and wired; clearing present_ here
+    // would turn one flaky read into touch that is dead for the rest of the session.
+    if (up) {
+        present_ = true;
+    } else if (present_) {
+        Serial.printf("[TOUCH] %s re-probe failed; keeping the earlier successful init\n", name_);
+    } else {
+        present_ = false;
+    }
+
     Serial.printf("[TOUCH] %s at 0x%02X: %s\n", name_, address_, present_ ? "ready" : "not found");
 #else
     present_ = false;
