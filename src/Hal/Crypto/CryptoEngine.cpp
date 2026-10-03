@@ -1,15 +1,28 @@
 #include "CryptoEngine.h"
 #include "FileSystem/FileSystem.h"
-#include <mbedtls/sha256.h>
-#include <mbedtls/sha512.h>
+// mbedTLS 4.x (what ESP-IDF v6.1 ships) moved the per-algorithm headers -- md5.h, sha256.h,
+// sha512.h, aes.h, rsa.h -- under the driver's private/ directory and left only the generic
+// layers public. So the algorithms are reached through PSA Crypto now, and the three headers
+// that remain here are the three this file genuinely still needs directly: the generic
+// message-digest API (for HMAC), the public-key API (for RSA verification) and base64.
+#include <psa/crypto.h>
 #include <mbedtls/md.h>
-#include <mbedtls/aes.h>
 #include <mbedtls/pk.h>
-#include <mbedtls/rsa.h>
 #include <mbedtls/base64.h>
 #include <esp_random.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
+
+namespace {
+// PSA requires psa_crypto_init() before any operation. It is idempotent and near-free after the
+// first call, so every entry point below routes through here rather than assuming some other
+// subsystem (TLS, WiFi) has already initialised it -- on a cold boot the first file hash can
+// easily be the first PSA user in the system.
+bool psaReady() {
+    static const bool ready = (psa_crypto_init() == PSA_SUCCESS);
+    return ready;
+}
+} // namespace
 
 bool CryptoEngine::hexToBytes(const String& hex, std::vector<uint8_t>& out) {
     out.clear();
@@ -51,39 +64,54 @@ String CryptoEngine::bytesToHex(const uint8_t* data, size_t length) {
 }
 
 String CryptoEngine::sha256(const String& data) {
+    if (!psaReady()) return "";
     uint8_t hash[32];
-    mbedtls_sha256((const unsigned char*)data.c_str(), data.length(), hash, 0 /* 0 = SHA-256 */);
-    return bytesToHex(hash, 32);
+    size_t hashLen = 0;
+    if (psa_hash_compute(PSA_ALG_SHA_256, (const uint8_t*)data.c_str(), data.length(),
+                         hash, sizeof(hash), &hashLen) != PSA_SUCCESS) {
+        return "";
+    }
+    return bytesToHex(hash, hashLen);
 }
 
 String CryptoEngine::sha512(const String& data) {
+    if (!psaReady()) return "";
     uint8_t hash[64];
-    mbedtls_sha512((const unsigned char*)data.c_str(), data.length(), hash, 0 /* 0 = SHA-512 */);
-    return bytesToHex(hash, 64);
+    size_t hashLen = 0;
+    if (psa_hash_compute(PSA_ALG_SHA_512, (const uint8_t*)data.c_str(), data.length(),
+                         hash, sizeof(hash), &hashLen) != PSA_SUCCESS) {
+        return "";
+    }
+    return bytesToHex(hash, hashLen);
 }
 
 String CryptoEngine::hmacSha256(const String& key, const String& message) {
-    const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (!mdInfo) return "";
+    // PSA rather than the legacy mbedtls_md_hmac_* family: in mbedTLS 4.x those three declarations
+    // sit behind MBEDTLS_DECLARE_PRIVATE_IDENTIFIERS, so they are no longer public API even though
+    // md.h itself still is. HMAC through PSA is the supported path, and it takes the key through
+    // the ordinary import route.
+    if (!psaReady()) return "";
 
-    mbedtls_md_context_t mdCtx;
-    mbedtls_md_init(&mdCtx);
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attr, PSA_KEY_TYPE_HMAC);
+    psa_set_key_bits(&attr, key.length() * 8);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_SIGN_MESSAGE);
+    psa_set_key_algorithm(&attr, PSA_ALG_HMAC(PSA_ALG_SHA_256));
 
-    if (mbedtls_md_setup(&mdCtx, mdInfo, 1 /* HMAC enabled */) != 0) {
-        mbedtls_md_free(&mdCtx);
+    mbedtls_svc_key_id_t keyId = MBEDTLS_SVC_KEY_ID_INIT;
+    if (psa_import_key(&attr, (const uint8_t*)key.c_str(), key.length(), &keyId) != PSA_SUCCESS) {
         return "";
     }
 
     uint8_t hmacOut[32];
-    if (mbedtls_md_hmac_starts(&mdCtx, (const unsigned char*)key.c_str(), key.length()) != 0 ||
-        mbedtls_md_hmac_update(&mdCtx, (const unsigned char*)message.c_str(), message.length()) != 0 ||
-        mbedtls_md_hmac_finish(&mdCtx, hmacOut) != 0) {
-        mbedtls_md_free(&mdCtx);
-        return "";
-    }
+    size_t hmacLen = 0;
+    psa_status_t st = psa_mac_compute(keyId, PSA_ALG_HMAC(PSA_ALG_SHA_256),
+                                      (const uint8_t*)message.c_str(), message.length(),
+                                      hmacOut, sizeof(hmacOut), &hmacLen);
+    psa_destroy_key(keyId);
+    if (st != PSA_SUCCESS) return "";
 
-    mbedtls_md_free(&mdCtx);
-    return bytesToHex(hmacOut, 32);
+    return bytesToHex(hmacOut, hmacLen);
 }
 
 String CryptoEngine::aesEncrypt(const String& plainText, const String& keyHex, const String& ivHex) {
@@ -111,28 +139,52 @@ String CryptoEngine::aesEncrypt(const String& plainText, const String& keyHex, c
     memcpy(padded.data(), plainText.c_str(), plainLen);
     memset(padded.data() + plainLen, (uint8_t)padLen, padLen);
 
-    // 3. In-Place IV Mutation Guard (mbedTLS mutates IV in-place during CBC)
-    unsigned char ivCopy[16];
-    memcpy(ivCopy, ivBytes.data(), 16);
+    // 3. Hardware AES-CBC Encryption
+    //
+    // The multipart PSA interface is used rather than the one-shot psa_cipher_encrypt(), because
+    // that one-shot generates its OWN random IV and prepends it to the output. This file's
+    // contract is the opposite: the caller supplies the IV and keeps it beside the ciphertext (see
+    // deviceEncrypt(), which stores it in the JSON envelope), so the IV must be set explicitly.
+    // PSA copies the IV, which also removes the in-place mutation hazard the mbedTLS CBC call had.
+    if (!psaReady()) return "";
+    if (totalLen == 0 || totalLen % 16 != 0) return "";
 
-    // 4. Hardware AES-CBC Encryption
-    mbedtls_aes_context aes;
-    mbedtls_aes_init(&aes);
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attr, PSA_KEY_TYPE_AES);
+    psa_set_key_bits(&attr, keyBytes.size() * 8);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_ENCRYPT);
+    psa_set_key_algorithm(&attr, PSA_ALG_CBC_NO_PADDING);
 
-    if (mbedtls_aes_setkey_enc(&aes, keyBytes.data(), (unsigned int)(keyBytes.size() * 8)) != 0) {
-        mbedtls_aes_free(&aes);
+    mbedtls_svc_key_id_t keyId = MBEDTLS_SVC_KEY_ID_INIT;
+    if (psa_import_key(&attr, keyBytes.data(), keyBytes.size(), &keyId) != PSA_SUCCESS) {
         return "";
     }
 
+    psa_cipher_operation_t op = PSA_CIPHER_OPERATION_INIT;
     std::vector<uint8_t> cipher(totalLen);
-    int ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, totalLen, ivCopy, padded.data(), cipher.data());
-    mbedtls_aes_free(&aes);
+    size_t outLen = 0;
 
-    if (ret != 0) {
-        return "";
+    psa_status_t st = psa_cipher_encrypt_setup(&op, keyId, PSA_ALG_CBC_NO_PADDING);
+    if (st == PSA_SUCCESS) st = psa_cipher_set_iv(&op, ivBytes.data(), ivBytes.size());
+    if (st == PSA_SUCCESS) {
+        st = psa_cipher_update(&op, padded.data(), padded.size(), cipher.data(), cipher.size(), &outLen);
     }
 
-    // 5. Base64 Encode Ciphertext
+    // CBC with no padding has nothing left over, so the finish call should write zero bytes -- but
+    // it must still be made, because it is what commits the operation.
+    size_t tailLen = 0;
+    if (st == PSA_SUCCESS) {
+        st = psa_cipher_finish(&op, cipher.data() + outLen, cipher.size() - outLen, &tailLen);
+    }
+    if (st != PSA_SUCCESS) {
+        psa_cipher_abort(&op);
+        psa_destroy_key(keyId);
+        return "";
+    }
+    psa_destroy_key(keyId);
+    cipher.resize(outLen + tailLen);
+
+    // 4. Base64 Encode Ciphertext
     size_t b64Len = 0;
     mbedtls_base64_encode(nullptr, 0, &b64Len, cipher.data(), cipher.size());
     if (b64Len == 0) return "";
@@ -163,11 +215,11 @@ String CryptoEngine::aesDecrypt(const String& base64Cipher, const String& keyHex
     }
 
     // 2. Base64 Decode Ciphertext
-    size_t outLen = 0;
-    mbedtls_base64_decode(nullptr, 0, &outLen, (const unsigned char*)base64Cipher.c_str(), base64Cipher.length());
-    if (outLen == 0) return "";
+    size_t b64Len = 0;
+    mbedtls_base64_decode(nullptr, 0, &b64Len, (const unsigned char*)base64Cipher.c_str(), base64Cipher.length());
+    if (b64Len == 0) return "";
 
-    std::vector<uint8_t> cipherBytes(outLen);
+    std::vector<uint8_t> cipherBytes(b64Len);
     size_t actualLen = 0;
     if (mbedtls_base64_decode(cipherBytes.data(), cipherBytes.size(), &actualLen, (const unsigned char*)base64Cipher.c_str(), base64Cipher.length()) != 0) {
         return "";
@@ -180,28 +232,45 @@ String CryptoEngine::aesDecrypt(const String& base64Cipher, const String& keyHex
         return "";
     }
 
-    // 4. In-Place IV Mutation Guard
-    unsigned char ivCopy[16];
-    memcpy(ivCopy, ivBytes.data(), 16);
+    // 4. Hardware AES-CBC Decryption -- same multipart shape as the encrypt side, and for the same
+    // reason: the IV comes from the caller (it was read back out of the JSON envelope) rather than
+    // from PSA's random-IV one-shot.
+    if (!psaReady()) return "";
 
-    // 5. Hardware AES-CBC Decryption
-    mbedtls_aes_context aes;
-    mbedtls_aes_init(&aes);
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attr, PSA_KEY_TYPE_AES);
+    psa_set_key_bits(&attr, keyBytes.size() * 8);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DECRYPT);
+    psa_set_key_algorithm(&attr, PSA_ALG_CBC_NO_PADDING);
 
-    if (mbedtls_aes_setkey_dec(&aes, keyBytes.data(), (unsigned int)(keyBytes.size() * 8)) != 0) {
-        mbedtls_aes_free(&aes);
+    mbedtls_svc_key_id_t keyId = MBEDTLS_SVC_KEY_ID_INIT;
+    if (psa_import_key(&attr, keyBytes.data(), keyBytes.size(), &keyId) != PSA_SUCCESS) {
         return "";
     }
 
+    psa_cipher_operation_t op = PSA_CIPHER_OPERATION_INIT;
     std::vector<uint8_t> plain(cipherBytes.size());
-    int ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, cipherBytes.size(), ivCopy, cipherBytes.data(), plain.data());
-    mbedtls_aes_free(&aes);
+    size_t outLen = 0;
 
-    if (ret != 0) {
-        return "";
+    psa_status_t st = psa_cipher_decrypt_setup(&op, keyId, PSA_ALG_CBC_NO_PADDING);
+    if (st == PSA_SUCCESS) st = psa_cipher_set_iv(&op, ivBytes.data(), ivBytes.size());
+    if (st == PSA_SUCCESS) {
+        st = psa_cipher_update(&op, cipherBytes.data(), cipherBytes.size(), plain.data(), plain.size(), &outLen);
     }
 
-    // 6. Strict PKCS#7 Unpadding Validation & Underflow Guard
+    size_t tailLen = 0;
+    if (st == PSA_SUCCESS) {
+        st = psa_cipher_finish(&op, plain.data() + outLen, plain.size() - outLen, &tailLen);
+    }
+    if (st != PSA_SUCCESS) {
+        psa_cipher_abort(&op);
+        psa_destroy_key(keyId);
+        return "";
+    }
+    psa_destroy_key(keyId);
+    plain.resize(outLen + tailLen);
+
+    // 5. Strict PKCS#7 Unpadding Validation & Underflow Guard
     size_t plainLen = plain.size();
     if (plainLen == 0) return "";
 
@@ -255,9 +324,15 @@ bool CryptoEngine::rsaVerify(const String& pubKeyPem, const String& message, con
         return false;
     }
 
-    // 3. Compute SHA-256 Hash of Message
+    // 3. Compute SHA-256 Hash of Message (PSA; mbedtls_sha256() is private in mbedTLS 4.x)
     uint8_t hash[32];
-    mbedtls_sha256((const unsigned char*)message.c_str(), message.length(), hash, 0);
+    size_t hashLen = 0;
+    if (!psaReady() ||
+        psa_hash_compute(PSA_ALG_SHA_256, (const uint8_t*)message.c_str(), message.length(),
+                         hash, sizeof(hash), &hashLen) != PSA_SUCCESS) {
+        mbedtls_pk_free(&pk);
+        return false;
+    }
 
     // 4. Hardware RSA Signature Verification (PKCS#1 v1.5 with SHA-256)
     ret = mbedtls_pk_verify(&pk, MBEDTLS_MD_SHA256, hash, 32, sigBytes.data(), sigBytes.size());
@@ -330,23 +405,38 @@ String CryptoEngine::sha256File(const char* path) {
         return "";
     }
 
-    mbedtls_sha256_context shaCtx;
-    mbedtls_sha256_init(&shaCtx);
-    mbedtls_sha256_starts(&shaCtx, 0 /* 0 = SHA-256 */);
+    // Streaming PSA hash. The point of this function is that a file of any size is read in 512-byte
+    // chunks and never held in memory, which is what psa_hash_setup/update/finish preserves -- the
+    // one-shot psa_hash_compute() would require the whole file as one buffer and defeat it.
+    if (!psaReady()) {
+        f.close();
+        return "";
+    }
+
+    psa_hash_operation_t shaCtx = PSA_HASH_OPERATION_INIT;
+    if (psa_hash_setup(&shaCtx, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+        f.close();
+        return "";
+    }
 
     uint8_t buffer[512];
     while (f.available()) {
         size_t bytesRead = f.read(buffer, sizeof(buffer));
-        if (bytesRead > 0) {
-            mbedtls_sha256_update(&shaCtx, buffer, bytesRead);
+        if (bytesRead > 0 && psa_hash_update(&shaCtx, buffer, bytesRead) != PSA_SUCCESS) {
+            psa_hash_abort(&shaCtx);
+            f.close();
+            return "";
         }
     }
     f.close();
 
     uint8_t hash[32];
-    mbedtls_sha256_finish(&shaCtx, hash);
-    mbedtls_sha256_free(&shaCtx);
+    size_t hashLen = 0;
+    if (psa_hash_finish(&shaCtx, hash, sizeof(hash), &hashLen) != PSA_SUCCESS) {
+        psa_hash_abort(&shaCtx);
+        return "";
+    }
 
-    return bytesToHex(hash, 32);
+    return bytesToHex(hash, hashLen);
 }
 

@@ -4,7 +4,9 @@
 #include "../Network/TLSHelper.h"
 #include "../../../Hal/Crypto/CryptoEngine.h"
 #include <esp_random.h>
-#include "mbedtls/sha256.h"
+// mbedTLS 4.x (ESP-IDF v6.1) no longer publishes sha256.h -- it moved under the driver's
+// private/ directory -- so SHA-256 comes from PSA Crypto.
+#include <psa/crypto.h>
 
 const char* KryonCloudManager::BASE_URL = "https://kryonos.harislab.tech";
 Preferences KryonCloudManager::prefs;
@@ -510,9 +512,11 @@ bool KryonCloudManager::downloadCloudFile(const String& remotePath, const String
         return false;
     }
 
-    mbedtls_sha256_context sha_ctx;
-    mbedtls_sha256_init(&sha_ctx);
-    mbedtls_sha256_starts(&sha_ctx, 0);
+    // Streaming PSA SHA-256: the checksum is computed as the download arrives, so the payload is
+    // never buffered whole.
+    psa_hash_operation_t sha_ctx = PSA_HASH_OPERATION_INIT;
+    const bool shaOk = (psa_crypto_init() == PSA_SUCCESS) &&
+                       (psa_hash_setup(&sha_ctx, PSA_ALG_SHA_256) == PSA_SUCCESS);
 
     WiFiClient* stream = http.getStreamPtr();
     uint8_t buffer[512];
@@ -526,7 +530,7 @@ bool KryonCloudManager::downloadCloudFile(const String& remotePath, const String
             int bytesRead = stream->readBytes(buffer, readSize);
             
             tmpFile.write(buffer, bytesRead);
-            mbedtls_sha256_update(&sha_ctx, buffer, bytesRead);
+            if (shaOk) psa_hash_update(&sha_ctx, buffer, bytesRead);
             totalBytes += bytesRead;
             lastReadTime = millis();
         } else {
@@ -542,14 +546,24 @@ bool KryonCloudManager::downloadCloudFile(const String& remotePath, const String
     http.end();
 
     unsigned char sha256Output[32];
-    mbedtls_sha256_finish(&sha_ctx, sha256Output);
-    mbedtls_sha256_free(&sha_ctx);
+    size_t sha256Len = 0;
+    const bool shaDone = shaOk &&
+        psa_hash_finish(&sha_ctx, sha256Output, sizeof(sha256Output), &sha256Len) == PSA_SUCCESS;
+    if (shaOk && !shaDone) psa_hash_abort(&sha_ctx);
 
     char computedHex[65];
-    for (int i = 0; i < 32; i++) {
-        sprintf(&computedHex[i * 2], "%02x", sha256Output[i]);
+    if (shaDone) {
+        for (int i = 0; i < 32; i++) {
+            sprintf(&computedHex[i * 2], "%02x", sha256Output[i]);
+        }
+        computedHex[64] = '\0';
+    } else {
+        // No usable digest. Falling through with an empty string means the header comparison below
+        // fails unless the server also sent no checksum -- which is the same "unverifiable" case,
+        // and it is reported as such rather than silently accepted.
+        computedHex[0] = '\0';
+        Serial.println("[KryonCloud] SHA-256 unavailable, checksum cannot be verified");
     }
-    computedHex[64] = '\0';
 
     // Verify Checksum & commit atomically
     if (expectedSha.length() == 0 || expectedSha.equalsIgnoreCase(computedHex)) {

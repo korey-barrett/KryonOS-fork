@@ -1,6 +1,9 @@
 #include "FileSystem.h"
 #include "Hal/Boards/Board.h"
-#include <mbedtls/md5.h>
+// mbedTLS 4.x (ESP-IDF v6.1) no longer publishes md5.h -- it moved under the driver's private/
+// directory -- so MD5 comes from PSA Crypto. PSA has always had it; the header was simply the only
+// thing that vanished.
+#include <psa/crypto.h>
 
 // These boards' cards are on SD_MMC, not the SPI `SD` class the shared code below names. Their
 // BoardConfig.cpp files are separate translation units, so the object has to be declared here too.
@@ -642,22 +645,36 @@ String FileSystem::getFileMD5(const char* path) {
     File file = targetFS->open(relPath.c_str(), FILE_READ);
     if (!file || file.isDirectory()) return "";
 
-    // Use the plain (void-returning) variants: the *_ret forms were removed in mbedTLS 3.x, which
-    // the current espressif32 platform pulls in. The non-_ret names exist on both 2.x and 3.x.
-    mbedtls_md5_context ctx;
-    mbedtls_md5_init(&ctx);
-    mbedtls_md5_starts(&ctx);
+    // Streaming PSA MD5, for the same reason sha256File() streams: the file is read in 512-byte
+    // chunks and never held in memory.
+    if (psa_crypto_init() != PSA_SUCCESS) {
+        file.close();
+        return "";
+    }
+
+    psa_hash_operation_t ctx = PSA_HASH_OPERATION_INIT;
+    if (psa_hash_setup(&ctx, PSA_ALG_MD5) != PSA_SUCCESS) {
+        file.close();
+        return "";
+    }
 
     uint8_t buffer[512];
     size_t len;
     while ((len = file.read(buffer, sizeof(buffer))) > 0) {
-        mbedtls_md5_update(&ctx, buffer, len);
+        if (psa_hash_update(&ctx, buffer, len) != PSA_SUCCESS) {
+            psa_hash_abort(&ctx);
+            file.close();
+            return "";
+        }
     }
     file.close();
 
     uint8_t hash[16];
-    mbedtls_md5_finish(&ctx, hash);
-    mbedtls_md5_free(&ctx);
+    size_t hashLen = 0;
+    if (psa_hash_finish(&ctx, hash, sizeof(hash), &hashLen) != PSA_SUCCESS) {
+        psa_hash_abort(&ctx);
+        return "";
+    }
 
     String hexHash = "";
     for (int i = 0; i < 16; i++) {
