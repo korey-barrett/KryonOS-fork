@@ -21,6 +21,7 @@ own `TARGET_*` name for real hardware (see `Display_Touch_Architecture.md` §6).
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **ESP32-S3 default** *(primary)* | `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16MB / 8MB OPI | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 6.5 MB |
 | **ESP32 default** | `esp32-default` | ESP32 (Xtensa LX6) | 4MB / None | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 3 MB (`huge_app.csv`) — **no OTA** |
+| **ESP32-CYD-28** *(one product)* | `esp32-cyd-28` | ESP32 (Xtensa LX6) | 4MB / None | ILI9341 SPI, 240x320 | XPT2046 Touch (bit-banged) | 1.875 MB ×2 slots (`min_spiffs.csv`) |
 | **ESP32-S31** *(preview)* | `esp32s31-default` | ESP32-S31 (RISC-V) | 16MB / 16MB OPI | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 16 MB table |
 | **Waveshare ESP32-S3-Touch-LCD-2.1B** *(preview)* | `waveshare-s3-lcd21b` | ESP32-S3 (Xtensa LX7) | 16MB / 8MB OPI | ST7701 480x480 **RGB parallel** | CST820 capacitive touch (I2C) | 16 MB table |
 
@@ -32,6 +33,14 @@ cannot drive it and the display comes up through `esp_lcd_panel_rgb` instead
 the shared I2C bus, bound to the CST816 driver from `platformio.ini`, and the board reports
 `hasTouch() == true`. Note that nothing in `src/` reads that function — the real switch is the
 `KRYONOS_TOUCH_*` build flags.
+
+The CYD row is the second specific product and the only 4 MB target that can update itself in place:
+`min_spiffs.csv` splits the flash into two 1.875 MB app slots, and the app measures ~1.83 MB. The
+price is the filesystem — `/apps` on LittleFS drops to 128 KB, where `esp32-default` keeps 896 KB —
+because 4 MB cannot hold a 3 MB app, ~900 KB of files and two 1.9 MB slots at once. It is **not** in
+`default_envs`; the environment lives in `src/Hal/Boards/board_configs/cyd.ini`, registered through
+`[platformio] extra_configs`, so build it with `pio run -e esp32-cyd-28`. Its touch is the XPT2046
+bit-banged on four dedicated pins (PENIRQ is unconnected on this board, so the driver reads pressure).
 
 The S31 requires ESP-IDF v6.1, which only arduino-esp32 **4.x** reaches, so `esp32s31-default` pins the
 pioarduino **pre-release** platform `61.04.00-RC1` (Arduino 4.0.0-RC1 / IDF 6.1) instead of the stable
@@ -76,12 +85,13 @@ src/Hal/
 │   │   ├── BoardConfig.h
 │   │   └── BoardConfig.cpp
 │   ├── board_configs/
+│   │   ├── cyd.ini                     <-- ACTIVE: env esp32-cyd-28 (listed in extra_configs)
 │   │   └── examples/                   <-- NOT built; reference snippets + README
 │   │       ├── cardputer.ini
-│   │       ├── cyd.ini
+│   │       ├── cyd.ini                 <-- the pre-registration copy of the above
 │   │       └── t_hmi.ini
 │   ├── cardputer/                      <-- Cardputer reference implementation (unbuilt)
-│   ├── cyd/                            <-- CYD reference implementation (unbuilt)
+│   ├── cyd/                            <-- CYD implementation (TARGET_CYD)
 │   └── t_hmi/                          <-- T-HMI reference implementation (unbuilt)
 ├── Display/                            <-- DisplayConfig.h + Display metrics accessor
 ├── Crypto/  I2C/  PWM/                 <-- Peripherals

@@ -11,6 +11,7 @@ on:
         options:
           - 'all'
           - 'esp32-default'
+          - 'esp32-cyd-28'
           - 'esp32s3-default'
           - 'esp32s31-default'
           - 'waveshare-s3-lcd21b'
@@ -54,10 +55,16 @@ on:
         description: 'Guide message for boards with OTA disabled (supports_ota: false)'
         required: true
         type: string
-        default: 'Flash via Web Flasher:\nkryonos.harislab.tech/flasher'
+        default: 'Flash over USB from this fork''s Releases page:\ngithub.com/korey-barrett/KryonOS-fork/releases'
 
       ota_esp32_default:
         description: '[OTA Toggle] Enable OTA for esp32-default?'
+        required: true
+        type: boolean
+        default: true
+
+      ota_esp32_cyd_28:
+        description: '[OTA Toggle] Enable OTA for esp32-cyd-28? (the first install must be over USB — the OTA table cannot be delivered by OTA)'
         required: true
         type: boolean
         default: true
@@ -112,6 +119,7 @@ jobs:
           RELEASE_TAG_IN: ${{ inputs.release_tag }}
           UNSUPPORTED_GUIDE: ${{ inputs.unsupported_ota_guide }}
           OTA_ESP32: ${{ inputs.ota_esp32_default }}
+          OTA_ESP32_CYD_28: ${{ inputs.ota_esp32_cyd_28 }}
           OTA_ESP32S3: ${{ inputs.ota_esp32s3_default }}
           OTA_ESP32S31: ${{ inputs.ota_esp32s31_default }}
           OTA_WAVESHARE_S3_LCD21B: ${{ inputs.ota_waveshare_s3_lcd21b }}
@@ -190,6 +198,7 @@ jobs:
           # release workflow's build matrix. See the comment in release.yml.
           ota_flags = {
               "esp32-default": os.environ["OTA_ESP32"].lower() == "true",
+              "esp32-cyd-28": os.environ["OTA_ESP32_CYD_28"].lower() == "true",
               "esp32s3-default": os.environ["OTA_ESP32S3"].lower() == "true",
               "esp32s31-default": os.environ["OTA_ESP32S31"].lower() == "true",
               "waveshare-s3-lcd21b": os.environ["OTA_WAVESHARE_S3_LCD21B"].lower() == "true",
@@ -226,6 +235,7 @@ jobs:
 
           all_boards = [
               "esp32-default",
+              "esp32-cyd-28",
               "esp32s3-default",
               "esp32s31-default",
               "waveshare-s3-lcd21b"

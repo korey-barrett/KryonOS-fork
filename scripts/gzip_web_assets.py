@@ -1,0 +1,153 @@
+"""Gzip the embedded web pages at build time.
+
+WebManager.cpp serves two HTML pages, and on the classic ESP32 the uncompressed copies are the
+difference between fitting the OTA slot and not. A precompressed blob checked into the tree would do
+the job until someone edited a page and forgot to regenerate it, so this generates the header from
+the .html sources on every build instead. It rewrites the file only when the bytes actually change,
+so SCons does not rebuild WebManager.cpp for nothing.
+
+Registered in platformio.ini under [env] as:
+
+    extra_scripts = pre:scripts/gzip_web_assets.py
+
+'pre:' matters: the header has to exist before the compiler opens WebManager.cpp.
+
+{{KRYONOS_VERSION}} is resolved here rather than by the C preprocessor. The page once spliced the
+version in as a compile-time string concatenation inside the raw literal, which meant the .html
+could not be opened on its own; replacing the placeholder at gzip time leaves the sources valid
+HTML in a browser.
+"""
+
+import gzip
+import io
+import os
+
+Import("env")  # noqa: F821 - injected by SCons
+
+# (source file in src/WebManager, symbol name emitted into the header)
+PAGES = [
+    ("filemanager.html", "filemanager_html_gz"),
+    ("login.html", "login_html_gz"),
+]
+PLACEHOLDER = "{{KRYONOS_VERSION}}"
+
+
+def _stringify(value):
+    """Unwrap the quoting SCons retains on a -D string define.
+
+    platformio.ini writes `-D KRYONOS_VERSION=\\"2.0.1\\"`, which reaches us as `\\"2.0.1\\"` -
+    quotes and backslashes included.
+    """
+    return str(value).replace("\\", "").strip('"')
+
+
+def _bare_name(token):
+    token = str(token).strip()
+    if token.startswith("-D"):
+        token = token[2:]
+    return token.strip()
+
+
+def _tokens(value):
+    """Flatten an SCons flag container into individual '-DNAME=value' / 'NAME=value' strings."""
+    if isinstance(value, str):
+        return value.split()
+    out = []
+    for item in value or []:
+        if isinstance(item, (list, tuple)):
+            out.extend(str(part) for part in item)
+        else:
+            out.extend(str(item).split())
+    return out
+
+
+def _version(env):
+    """KRYONOS_VERSION from the resolved build configuration.
+
+    PlatformIO does not keep -D flags from `build_flags` in one predictable place - a
+    `-D NAME=value` written in platformio.ini may surface as a parsed ('NAME', 'value') entry in
+    CPPDEFINES or only as raw text in the flag lists - so search all of them rather than pick one
+    and hope. Getting this wrong is silent: the page would render "vunknown" and nobody would
+    notice until it shipped, so failure here is an error, not a fallback.
+    """
+    for define in env.get("CPPDEFINES") or []:
+        if isinstance(define, (list, tuple)):
+            name, value = define[0], define[1]
+        else:
+            name, _, value = str(define).partition("=")
+        if _bare_name(name) == "KRYONOS_VERSION" and value:
+            return _stringify(value)
+
+    for key in ("CCFLAGS", "CXXFLAGS", "CPPFLAGS", "BUILD_FLAGS"):
+        for token in _tokens(env.get(key)):
+            name, _, value = token.partition("=")
+            if _bare_name(name) == "KRYONOS_VERSION" and value:
+                return _stringify(value)
+
+    raise Exception(
+        "gzip_web_assets: KRYONOS_VERSION not found in CPPDEFINES or the flag lists - the login "
+        "page would render without a version. Check the -D in platformio.ini [env].build_flags."
+    )
+
+
+def _render(path, symbol, version):
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    # The pages are authored CRLF on Windows and the firmware ships LF. Normalising here means the
+    # two copies cannot drift and the compressed bytes come out identical across checkouts.
+    text = data.replace(b"\r\n", b"\n").decode("utf-8")
+    text = text.replace(PLACEHOLDER, version)
+
+    buffer = io.BytesIO()
+    # mtime=0 keeps the gzip header deterministic - without it every build produces different bytes
+    # and the header is rewritten (and WebManager.cpp recompiled) even when nothing changed.
+    with gzip.GzipFile(fileobj=buffer, mode="wb", compresslevel=9, mtime=0) as stream:
+        stream.write(text.encode("utf-8"))
+    blob = buffer.getvalue()
+
+    rows = [
+        "  " + "".join("0x%02x," % byte for byte in blob[start:start + 16])
+        for start in range(0, len(blob), 16)
+    ]
+    block = (
+        "\n// %s\n"
+        "static const uint8_t %s[] PROGMEM = {\n%s\n};\n"
+        "static const size_t %s_len = %d;\n"
+        % (os.path.basename(path), symbol, "\n".join(rows), symbol, len(blob))
+    )
+    return block, len(blob)
+
+
+web_dir = os.path.join(env.subst("$PROJECT_DIR"), "src", "WebManager")
+out_dir = os.path.join(env.subst("$BUILD_DIR"), "web_assets")
+out_path = os.path.join(out_dir, "web_assets_gz.h")
+
+# On CPPPATH so `#include "web_assets_gz.h"` resolves without a relative path.
+env.Append(CPPPATH=[out_dir])
+
+version = _version(env)
+parts = [
+    "// Generated by scripts/gzip_web_assets.py - do not edit.\n"
+    "// Rebuilt from src/WebManager/*.html on every build; see that script for the details.\n"
+    "#pragma once\n"
+]
+for name, symbol in PAGES:
+    block, size = _render(os.path.join(web_dir, name), symbol, version)
+    parts.append(block)
+    print("gzip_web_assets: %-18s -> %-24s %6d bytes  (version %s)" % (name, symbol, size, version))
+
+content = "".join(parts)
+
+existing = None
+if os.path.exists(out_path):
+    with open(out_path, "r", encoding="utf-8", newline="") as handle:
+        existing = handle.read()
+
+if existing != content:
+    os.makedirs(out_dir, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+    print("gzip_web_assets: wrote %s" % out_path)
+else:
+    print("gzip_web_assets: %s unchanged" % out_path)

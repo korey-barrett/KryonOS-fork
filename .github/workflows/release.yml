@@ -75,6 +75,7 @@ jobs:
       matrix:
         board:
           - esp32-default
+          - esp32-cyd-28
           - esp32s3-default
           - waveshare-s3-lcd21b
 
@@ -127,7 +128,7 @@ jobs:
           # The classic ESP32 reserves the first 0x1000 bytes for the (unused) secure-boot IV;
           # the S3 places its bootloader at 0x0000. Get this wrong and the board will not boot.
           case "${BOARD_ENV}" in
-            esp32-default)
+            esp32-default|esp32-cyd-28)
               BOOT_OFFSET="0x1000"
               ;;
             *)

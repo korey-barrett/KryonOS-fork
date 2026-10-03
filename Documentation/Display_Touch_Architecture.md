@@ -14,11 +14,20 @@ panel + XPT2046 touch), not a specific product — copy it and give it your own 
 | Environment | Chip | Flash/PSRAM | Core / IDF | In `default_envs` | App partition |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | yes | 6.5 MB — ample headroom |
-| `esp32-default` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | yes | 1.96 MB — **1,493 bytes free**, see below |
+| `esp32-default` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | yes | 3 MB (`huge_app.csv`), no OTA slot |
+| `esp32-cyd-28` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | **no — one product** | 1.875 MB ×2 OTA slots (`min_spiffs.csv`) |
 | `esp32s31-default` | ESP32-S31 (RISC-V) | 16 MB / 16 MB | Arduino 4.0.0-RC1 / IDF 6.1 | **no — preview** | 16 MB table (`default_16MB.csv`) |
 | `waveshare-s3-lcd21b` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | **no — one product** | 16 MB table (`default_16MB.csv`) |
 
 `waveshare-s3-lcd21b` is the first board whose panel is not on SPI at all — see §2.5.
+
+`esp32-cyd-28` (Cheap Yellow Display: ESP32 + ILI9341 + XPT2046) is the reference board for a
+*classic* ESP32 with a real panel attached, and the only 4 MB target here that keeps two OTA slots.
+It lives in `src/Hal/Boards/board_configs/cyd.ini` rather than inline in `platformio.ini`, registered
+through `[platformio] extra_configs` — so `pio run -e esp32-cyd-28` builds it while the bare `pio run`
+(builds `default_envs` only) does not. Its app is ~1.83 MB against the 1.875 MB slot, which is what
+lets it update in place; the trade is a 128 KB `/apps` filesystem against `esp32-default`'s 896 KB, and
+a board whose app outgrows the slot has to give up one or the other.
 
 `esp32-default` originally used `min_spiffs.csv` — the largest app partition a 4 MB ESP32 offers while
 keeping two OTA slots — and the firmware filled 99.9% of it (**1,964,587 of 1,966,080 bytes, leaving
@@ -118,10 +127,13 @@ Each environment's `build_flags` configure TFT_eSPI. The active ESP32-S3 default
 -D USE_HSPI_PORT=1
 ```
 
-The three environments in `platformio.ini` (`esp32s3-default`, `esp32-default`, `esp32s31-default`)
-are the only *active* places these flags live. The three reference snippets under
-`src/Hal/Boards/board_configs/examples/` (`cyd.ini`, `t_hmi.ini`, `cardputer.ini`) show other
-panel/touch combinations but are deliberately not in `extra_configs`, so they are never built.
+The *active* places these flags live are `platformio.ini` itself (`esp32s3-default`,
+`esp32-default`, `esp32s31-default`, `waveshare-s3-lcd21b`) plus the board snippets under
+`src/Hal/Boards/board_configs/` that are listed in `[platformio] extra_configs` — today that is
+`cyd.ini` (`esp32-cyd-28`). Registering a snippet there makes it buildable with
+`pio run -e <name>` without adding it to `default_envs`, so a bare `pio run` still builds only the
+chip defaults. The remaining snippets under `board_configs/examples/` (including the original,
+now-superseded `cyd.ini`) show further panel/touch combinations and are never built.
 
 ### 2.2 Board profile headers
 
@@ -168,6 +180,7 @@ type**, each behind a positive guard set by its environment in `platformio.ini`:
 | :--- | :--- | :--- |
 | `esp32s3-default` | `TARGET_ESP32S3_DEFAULT` | `src/Hal/Boards/esp32s3/BoardConfig.cpp` |
 | `esp32-default` | `TARGET_ESP32_DEFAULT` | `src/Hal/Boards/esp32/BoardConfig.cpp` |
+| `esp32-cyd-28` | `TARGET_CYD` | `src/Hal/Boards/cyd/BoardConfig.cpp` |
 | `waveshare-s3-lcd21b` | `TARGET_WAVESHARE_S3_LCD21B` | `src/Hal/Boards/waveshare-s3-lcd21b/BoardConfig.cpp` |
 
 > **Trap:** these files used to be guarded by an *inverse* condition
@@ -533,7 +546,7 @@ differs per chip because the S31 needs a newer IDF than the other two:
 
 | Env | Pinned platform | Resolves to |
 | :--- | :--- | :--- |
-| `esp32s3-default`, `esp32-default` | `.../releases/download/55.03.312-1/platform-espressif32.zip` | Arduino 3.3.12 / IDF 5.5.5 (stable) |
+| `esp32s3-default`, `esp32-default`, `esp32-cyd-28`, `waveshare-s3-lcd21b` | `.../releases/download/55.03.312-1/platform-espressif32.zip` | Arduino 3.3.12 / IDF 5.5.5 (stable) |
 | `esp32s31-default` | `.../releases/download/61.04.00-RC1/platform-espressif32.zip` | Arduino 4.0.0-RC1 / IDF 6.1 (**pre-release**) |
 
 ```

@@ -115,6 +115,6 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     # the OTA manager and the app store all print them. Kept numerically identical to the
     # platformio.ini values, because the OTA manifest compares them: a Korvo-1 that reports a
     # different API level than the manifest advertises would find no updates.
-    KRYONOS_VERSION=\"2.0.1\"
+    KRYONOS_VERSION=\"2.0.2\"
     KRYONOS_API_LEVEL=2
 )

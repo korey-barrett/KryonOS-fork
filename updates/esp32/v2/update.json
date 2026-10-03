@@ -33,6 +33,13 @@
       "version": "2.0.1",
       "type": "patch",
       "changelog": "- Security Hardening, Permissions & Runtime Improvements"
+    },
+    "esp32-cyd-28": {
+      "supports_ota": false,
+      "guide": "Install this build over USB once. OTA needs two app slots, so the CYD has to be reflashed by wire to get the new partition table; every update after that arrives in place. Use the GitHub Releases page for this fork, not the upstream flasher.",
+      "version": "2.0.1",
+      "type": "patch",
+      "changelog": "- Security Hardening, Permissions & Runtime Improvements"
     }
   }
 }

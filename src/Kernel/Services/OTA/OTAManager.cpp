@@ -8,7 +8,11 @@ OTAUpdateInfo OTAManager::cachedInfo;
 OTAProgress OTAManager::currentProgress;
 bool OTAManager::bootConfirmed = false;
 unsigned long OTAManager::bootTimeMs = 0;
-const char* OTAManager::UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/Haris16-code/KryonOS/refs/heads/main/updates/esp32/v2/update.json";
+// Points at THIS fork's manifest, not upstream's. A device running this firmware must not be
+// offered upstream builds: they are not the same product, and the CYD build in particular depends
+// on a partition layout upstream does not ship. TLSHelper calls setInsecure(), so no trust anchor
+// changes are needed for the host change.
+const char* OTAManager::UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/korey-barrett/KryonOS-fork/refs/heads/main/updates/esp32/v2/update.json";
 
 void OTAManager::init() {
     bootTimeMs = millis();

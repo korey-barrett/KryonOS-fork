@@ -11,15 +11,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Haris16-code/KryonOS/releases"><img src="https://img.shields.io/github/v/release/Haris16-code/KryonOS?style=for-the-badge&logo=github" alt="Latest Release" /></a>
-  <a href="https://github.com/Haris16-code/KryonOS/stargazers"><img src="https://img.shields.io/github/stars/Haris16-code/KryonOS?style=for-the-badge&logo=github" alt="GitHub Stars" /></a>
-  <a href="https://github.com/Haris16-code/KryonOS/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Haris16-code/KryonOS?style=for-the-badge" alt="License" /></a>
+  <a href="https://github.com/korey-barrett/KryonOS-fork/releases"><img src="https://img.shields.io/github/v/release/korey-barrett/KryonOS-fork?style=for-the-badge&logo=github" alt="Latest Release" /></a>
+  <a href="https://github.com/Haris16-code/KryonOS/stargazers"><img src="https://img.shields.io/github/stars/korey-barrett/KryonOS-fork?style=for-the-badge&logo=github" alt="GitHub Stars" /></a>
+  <a href="https://github.com/Haris16-code/KryonOS/blob/main/LICENSE"><img src="https://img.shields.io/github/license/korey-barrett/KryonOS-fork?style=for-the-badge" alt="License" /></a>
 </p>
 
 <p>
   <a href="https://github.com/Haris16-code/KryonOS/wiki">Documentation</a>
   •
-  <a href="https://github.com/Haris16-code/KryonOS/releases">Releases</a>
+  <a href="https://github.com/korey-barrett/KryonOS-fork/releases">Releases</a>
   •
   <a href="https://github.com/Haris16-code/KryonOS/discussions">Discussions</a>
   •
@@ -310,7 +310,7 @@
 <h2>How to Flash</h2>
 
 <h3>Option 1: Using Precompiled Binaries</h3>
-<p>You can download the latest precompiled firmware <code>.bin</code> files directly from our <a href="https://github.com/Haris16-code/KryonOS/releases">Releases Page</a>.</p>
+<p>You can download the latest precompiled firmware <code>.bin</code> files directly from our <a href="https://github.com/korey-barrett/KryonOS-fork/releases">Releases Page</a>.</p>
 
 <p>Use an ESP32 flasher tool (such as <code>esptool.py</code> or the official ESP Flash Download Tool) to write the binaries:</p>
 <pre>esptool.py --chip esp32s3 --port COM14 --baud 921600 write_flash -z \
@@ -323,14 +323,19 @@
 <p>To compile and flash from source:</p>
 
 <pre># 1. Clone repository
-git clone https://github.com/Haris16-code/KryonOS.git
-cd KryonOS
+git clone https://github.com/korey-barrett/KryonOS-fork.git
+cd KryonOS-fork
 
 # 2. Build &amp; Upload for the ESP32-S3 default board
 pio run -e esp32s3-default -t upload
 
 # Or for the plain-ESP32 default board:
 pio run -e esp32-default -t upload
+
+# Or for the Cheap Yellow Display (ESP32 + ILI9341 + XPT2046). This is the
+# only 4 MB target that updates over the air, so flash it over USB the first
+# time -- the two-slot partition table cannot be delivered by an update:
+pio run -e esp32-cyd-28 -t upload
 
 # Or for the ESP32-S31 default board (preview: Arduino 4.x / ESP-IDF 6.1,
 # excluded from the default environment set until the port is done):
@@ -436,7 +441,7 @@ Areas where contributions are especially useful include:
 
 <h2>Star the Project</h2>
 <p>If you like KryonOS or find this project useful, please consider giving our repository a <strong>Star on GitHub</strong>! Every star boosts project visibility, helps grow the embedded JavaScript community, and motivates ongoing development.</p>
-<p>&rarr; <a href="https://github.com/Haris16-code/KryonOS">Star KryonOS on GitHub</a></p>
+<p>&rarr; <a href="https://github.com/korey-barrett/KryonOS-fork">Star KryonOS on GitHub</a></p>
 
 <hr>
 <h2>Contact Us</h2>
