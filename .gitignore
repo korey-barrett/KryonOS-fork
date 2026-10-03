@@ -24,6 +24,7 @@ arduino-esp32/
 # bring-up diagnostic is built into idf/build-bringup/ so that switching between it and the OS does
 # not invalidate the other's object files.
 idf/build*/
+idf/*.log
 idf/sdkconfig
 idf/sdkconfig.old
 idf/managed_components/
