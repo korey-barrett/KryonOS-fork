@@ -77,6 +77,26 @@ String MyKeyboard::getString(String initialText, String promptMsg, int maxLen) {
     drawKeyboard(currentText, promptMsg, caps, -1, -1, page, charPage);
     tftInstance->present();
 
+    // Wait out the tap that opened the keyboard, BEFORE reading anything from the panel.
+    //
+    // This function is entered from the main loop's touch handler, which acts on the RISING edge
+    // (the wasTouched flag in main.cpp), so the finger that pressed "select this network" is still
+    // down when the first read below happens. That read is then dispatched as a key press like any
+    // other. The WiFi scan cards start at y46 and are 42px tall (UiLayout: scanCardsTop is
+    // header.bottom() + 10), so the first card overlaps the button row's y70..100 band -- a tap low
+    // and left of centre lands in the CAPS cell and turns caps on silently, and the first character
+    // typed afterwards comes out uppercase. The same stray read can land on OK/ESC (the prompt
+    // returns empty) or on a grid key, which types a character nobody pressed.
+    //
+    // The release wait that follows every key already exists a few lines down; this is that same
+    // wait applied to the press that got us here. Bounded for the same reason it is there: a panel
+    // stuck reporting contact must not wedge the keyboard.
+    const uint32_t openedAt = millis();
+    uint16_t openX, openY;
+    while (TouchDriver::getTouch(&openX, &openY) && (uint32_t)(millis() - openedAt) < 1000) {
+        delay(20);
+    }
+
     while (!done) {
         uint16_t x, y;
         if (TouchDriver::getTouch(&x, &y)) {
