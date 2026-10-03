@@ -35,11 +35,13 @@
       "changelog": "- Security Hardening, Permissions & Runtime Improvements"
     },
     "esp32-cyd-28": {
-      "supports_ota": false,
-      "guide": "Install this build over USB once. OTA needs two app slots, so the CYD has to be reflashed by wire to get the new partition table; every update after that arrives in place. Use the GitHub Releases page for this fork, not the upstream flasher.",
-      "version": "2.0.1",
+      "supports_ota": true,
+      "version": "2.0.2",
       "type": "patch",
-      "changelog": "- Security Hardening, Permissions & Runtime Improvements"
+      "changelog": "- Fork-hosted OTA and CYD in-place updates",
+      "firmware_url": "https://github.com/korey-barrett/KryonOS-fork/releases/download/v2.0.2/KryonOS-v2.0.2-esp32-cyd-28-firmware-0x10000.bin",
+      "firmware_size": 1830176,
+      "firmware_md5": "5131e440b2b05ac9362e18d086d67e15"
     }
   }
 }
