@@ -338,7 +338,13 @@ pio run -e esp32s31-default -t upload
 
 # Display size is a build flag, not a code constant: edit the
 # KRYONOS_DISPLAY_WIDTH / _HEIGHT / _ROTATION lines under the environment
-# in platformio.ini to match your panel, then rebuild.</pre>
+# in platformio.ini to match your panel, then rebuild.
+#
+# On a board whose panel is larger than the canvas it draws (the Waveshare 2.1B,
+# whose 480x480 panel is round), KRYONOS_DISPLAY_* is the LOGICAL canvas the UI
+# is laid out for and the backend scales it into the panel. There the panel's own
+# size lives in the board header as BOARD_PANEL_W/H, because it is a hardware
+# fact the panel timings are written from rather than a UI resolution.</pre>
 
 <hr>
 <h2>Documentation</h2>

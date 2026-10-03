@@ -16,14 +16,28 @@
 
 #include <Arduino.h>
 
+// --- Panel geometry: a HARDWARE FACT, not a UI resolution -------------------------------------
+// The ST7701 scans out 480x480 and its timing registers are written from these two numbers. They are
+// deliberately NOT KRYONOS_DISPLAY_*: that pair is the logical canvas the UI draws to, and the two
+// are different on this board because the panel is round. A 480x480 canvas is cut by the bezel --
+// the footer's UP and DN thirds sit outside the glass -- so the canvas is smaller and is scaled up
+// into the largest rect that fits the circle. See the round-aperture block in
+// Hal/Display/EspLcdRgbDisplay.h; the rect there is derived from the canvas, not from this pair.
+//
+// Collapsing these back into one value is the specific mistake that reconfigured the panel timings
+// instead of upscaling, so keep them separate.
+#define BOARD_PANEL_W 480
+#define BOARD_PANEL_H 480
+
 // --- Display resolution: the LOGICAL canvas, measured AFTER rotation -------------------------
 // These are only FALLBACKS; the live values are the -D KRYONOS_DISPLAY_* build flags in
-// platformio.ini. The panel is square, so rotation only decides its orientation.
+// platformio.ini. 240x320 is the canvas the UI was laid out for, and at that size the 6/5 aperture
+// scale lands its corners exactly on the 480 px bezel (sqrt(144^2 + 192^2) = 240).
 #ifndef KRYONOS_DISPLAY_WIDTH
-#define KRYONOS_DISPLAY_WIDTH 480
+#define KRYONOS_DISPLAY_WIDTH 240
 #endif
 #ifndef KRYONOS_DISPLAY_HEIGHT
-#define KRYONOS_DISPLAY_HEIGHT 480
+#define KRYONOS_DISPLAY_HEIGHT 320
 #endif
 #ifndef KRYONOS_DISPLAY_ROTATION
 #define KRYONOS_DISPLAY_ROTATION 0
@@ -47,6 +61,19 @@
 // There is deliberately NO TOUCH_RST_PIN either: the controller's reset is EXIO2 on the TCA9554
 // expander, not a SoC pin, so the macro would drive a pin nothing is connected to. The driver pulses
 // it through boardExpander() immediately before each probe, which is the only moment that works.
+
+// --- SD card: SDMMC 1-bit ---------------------------------------------------------------------
+// CLK/CMD are GPIO2/GPIO1 -- the same pair the ST7701's 3-wire command bus uses (SDA=1, SCL=2).
+// That bus is bit-banged only while the panel's init table goes out, and the backend releases both
+// pins when it finishes, so the card must be mounted AFTER Display::begin(). main.cpp's ordering
+// already gives it that: FileSystem::init() runs several steps later.
+//
+// Only DAT0 is wired, hence 1-bit. The slot is NOT on SPI -- there is no separate chip-select line
+// -- so the SPI `SD` class cannot drive it. It mounts as SD_MMC, and FileSystem routes "/sd/..."
+// paths through whichever object the board actually mounted (see sdFS in FileSystem.cpp).
+#define BOARD_SD_CLK_PIN 2
+#define BOARD_SD_CMD_PIN 1
+#define BOARD_SD_D0_PIN  42
 
 // --- Panel wiring (documentation; the backend holds the real values) --------------------------
 //   ST7701 RGB data[16] = {5,45,48,47,21,14,13,12,11,10,9,46,3,8,18,17}

@@ -13,9 +13,10 @@
  *   The entire UI draws text through TFT_eSPI's fonts and lays out with TFT_eSPI's textWidth(). A
  *   hand-written rasterizer (see RamFramebufferDisplay) has no font, so it would silently drop every
  *   label. This backend therefore keeps TFT_eSPI as a pure SOFTWARE RASTERIZER: drawings land in a
- *   full-screen 16bpp TFT_eSprite in PSRAM, and present() blits that sprite to the panel. The glyphs,
- *   the metrics and the anti-aliasing are then pixel-identical to the SPI boards, so UiLayout's
- *   geometry stays correct here for free.
+ *   16bpp TFT_eSprite in PSRAM -- the logical canvas, which is smaller than the panel because the
+ *   panel is round (see THE ROUND APERTURE below) -- and present() blits that sprite to the panel.
+ *   The glyphs, the metrics and the anti-aliasing are then pixel-identical to the SPI boards, so
+ *   UiLayout's geometry stays correct here for free.
  *
  *   The TFT_eSPI instance this sprite is built against is a "phantom": it exists only to satisfy the
  *   sprite's constructor, is never init()ed, and owns no pins. The environment that selects this
@@ -29,18 +30,23 @@
  *   designed to be pushed to an SPI panel. The RGB panel path is the other way round: ESP-IDF's RGB
  *   driver exposes no byte-order knob for the framebuffer, and every RGB panel configuration in the
  *   wild hands it native little-endian RGB565 (the vendor code for this very board sets
- *   `swap_bytes = 0` for its RGB path and `1` for its SPI path). present() therefore swaps the
- *   sprite's words into a staging buffer on the way out. Flip KRYONOS_RGB_BLIT_SWAP to 0 if a future
- *   IDF revision starts swapping for you; the boot log prints which mode is active.
+ *   `swap_bytes = 0` for its RGB path and `1` for its SPI path). The blit therefore swaps the
+ *   sprite's words on the way into the framebuffer. Flip KRYONOS_RGB_BLIT_SWAP to 0 if a future IDF
+ *   revision starts swapping for you; the boot log prints which mode is active.
+ *
+ * THE ROUND APERTURE
+ *   This board's panel is a 480x480 circle, not a square. A 480x480 canvas is therefore cut by the
+ *   bezel: the footer bar's UP and DN thirds, and both header corners, sit outside the glass and
+ *   cannot be touched at all. So the logical canvas is smaller than the panel and is scaled into the
+ *   largest rect that fits the circle -- see the aperture block on the class below.
  *
  * WHAT IT DOES NOT DO
  *   Sprites for JS / notifications. nativeTft() stays nullptr, so NotificationManager and the JS
  *   createSprite binding degrade exactly as documented for a non-TFT_eSPI backend. That needs a
  *   backend-neutral KryonSprite, which is not part of this pass.
  *
- *   This backend has never run on hardware. Every bring-up failure path logs a distinct one-line
- *   reason and leaves the backlight off rather than hanging, so a dark panel can be localised from
- *   serial alone.
+ *   Every bring-up failure path logs a distinct one-line reason and leaves the backlight off rather
+ *   than hanging, so a dark panel can be localised from serial alone.
  */
 
 // ONLY the chips whose ESP-IDF ships the LCD_CAM RGB peripheral driver can compile this backend --
@@ -63,8 +69,43 @@
 
 class EspLcdRgbDisplay : public KryonDisplay {
 public:
-    EspLcdRgbDisplay(int16_t nativeWidth, int16_t nativeHeight, int backlightPin);
+    // nativeWidth/nativeHeight are the PANEL's scan size and drive the RGB timings, the framebuffer
+    // and the aperture rect's centring. logicalWidth/logicalHeight are the canvas the UI draws to --
+    // the size of the sprite, and what width()/height() report. On this board the two differ because
+    // the panel is round and the canvas is scaled up into it (see the aperture block below).
+    //
+    // They are deliberately separate arguments: passing the logical size as the native size (as this
+    // backend used to, when the two were the same value) reconfigures the panel timings and shrinks
+    // the sprite instead of upscaling, which is a broken panel rather than a smaller canvas.
+    EspLcdRgbDisplay(int16_t nativeWidth, int16_t nativeHeight, int16_t logicalWidth,
+                     int16_t logicalHeight, int backlightPin);
     ~EspLcdRgbDisplay() override;
+
+    // --- The round aperture -------------------------------------------------------------------
+    //
+    // This panel is a 480 px circle, so the logical canvas has to be a rectangle that fits inside
+    // it. The blit upscales the canvas by SCALE_NUM/SCALE_DEN into a rect centred on the panel, and
+    // the touch path inverts exactly that transform to get canvas pixels back.
+    //
+    // 6/5 is the largest uniform scale that keeps the whole canvas inside the bezel. A 240x320
+    // canvas has a half-diagonal of sqrt(120^2 + 160^2) = 200 px, so it can grow to 200 * 6/5 = 240
+    // px -- exactly the bezel radius, with all four corners landing on the circle. Larger scales are
+    // cut by the round edge, and they go fast: at 1.4x only the middle 51% of the top edge is still
+    // inside the circle, and at 1.5x the entire top and bottom edges fall outside it, which would
+    // take the footer bar with them.
+    static constexpr int16_t SCALE_NUM = 6;
+    static constexpr int16_t SCALE_DEN = 5;
+
+    // Forward edge: the first PANEL offset that displays canvas pixel c. This is the CEILING of
+    // c*SCALE_NUM/SCALE_DEN, not the floor -- the floor is the natural thing to write and it is wrong
+    // for most c, naming a panel pixel that displays c-1.
+    static int32_t canvasToPanelEdge(int32_t c) {
+        return (c * SCALE_NUM + SCALE_DEN - 1) / SCALE_DEN;
+    }
+
+    // Inverse: the canvas pixel a panel offset inside the rect displays. The blit drives itself from
+    // this function, so forward and inverse are one expression and cannot drift apart.
+    static int32_t apertureOffsetToCanvas(int32_t p) { return p * SCALE_DEN / SCALE_NUM; }
 
     // --- Lifecycle ---
     void init(uint8_t tc = 0) override;
@@ -118,6 +159,23 @@ public:
     // nativeTft() is deliberately left as the nullptr default: the phantom TFT_eSPI owns no pins and
     // was never init()ed, so handing it to sprite consumers would push pixels at an unconfigured bus.
 
+    /**
+     * Invert the blit's scale and centring, so a touch on the panel comes back in canvas pixels.
+     *
+     * Bounds are checked in rect space, BEFORE the divide. Integer division truncates toward zero,
+     * so a negative offset -- a touch left of or above the rect -- would divide to 0 and be read as a
+     * hit on the canvas edge. Taps outside the rect return false and are logged once, because a
+     * controller reporting something other than panel pixels should say so on the first flash rather
+     * than present as touch that is simply dead.
+     */
+    bool panelToCanvas(int32_t px, int32_t py, int32_t* cx, int32_t* cy) const override;
+
+    /** The blitted rect, in panel pixels. The boot log prints these; tests can assert them. */
+    int16_t apertureWidth() const { return blitW_; }
+    int16_t apertureHeight() const { return blitH_; }
+    int16_t apertureOffsetX() const { return offsetX_; }
+    int16_t apertureOffsetY() const { return offsetY_; }
+
     // --- Frame presentation ---
     void present() override;
 
@@ -137,14 +195,24 @@ private:
     bool sendInitTable();
     bool setUpPanel();
 
-    // One full-panel frame: optional byte swap into staging_, then esp_lcd_panel_draw_bitmap.
+    // One frame: upscale the canvas into the given panel framebuffer through the aperture rect.
     //
-    // This is deliberately the same route this board's shipped firmware takes: its LVGL port calls
-    // draw_bitmap(panel, 0, 0, 480, 480, buffer) with two framebuffers and a bounce buffer, and the
-    // driver handles the copy and the PSRAM cache maintenance. Writing into the framebuffer directly
-    // instead would mean owning esp_cache_msync here, which is only necessary for code that fills
-    // the framebuffer itself.
-    void blit();
+    // The caller picks the buffer, and that choice is the whole anti-tearing story: with two
+    // framebuffers (see setUpPanel) present() always draws into the one the scanout is NOT reading,
+    // then asks the driver to adopt it at the next frame boundary. Drawing into the live buffer is
+    // what produced the thin line sweeping the screen, and with a single framebuffer there is no way
+    // to avoid it -- the write and the scan race on the same memory.
+    //
+    // Driving the sprite's pixels in directly, rather than handing draw_bitmap a staging buffer to
+    // copy, also halves the per-frame work: the aperture rect is 288x384 = 110,592 pixels, against
+    // the 230,400 a full-panel copy would touch. The cost of owning the framebuffer is owning its
+    // cache maintenance, which is what the esp_cache_msync at the end of the blit is for.
+    void blitInto(uint16_t* dst);
+
+    // Blacken BOTH framebuffers, once, at bring-up. Everything outside the aperture rect is then
+    // never written again, so a seam landing there has identical pixels on both sides and cannot
+    // show -- in either buffer the scanout can reach.
+    void clearFrameBuffer();
 
     // Sprite-native rasterizer helpers, mirroring RamFramebufferDisplay's algorithms.
     void hLine(int32_t x, int32_t y, int32_t w, uint16_t color);
@@ -158,13 +226,22 @@ private:
     TFT_eSprite canvas_{&phantom_};
 
     esp_lcd_panel_handle_t panel_ = nullptr;
-    uint16_t* staging_ = nullptr; // byte-swap destination for present()
+
+    // The panel's two framebuffers, taken once at bring-up and never re-fetched. Presenting is
+    // picking one of these pointers, not copying pixels into the driver -- see blitInto.
+    void* fb_[2] = {nullptr, nullptr};
 
     int backlightPin_ = -1;
-    int16_t nativeW_ = 0;
+    int16_t nativeW_ = 0; // the panel: sprite, RGB timings and framebuffer
     int16_t nativeH_ = 0;
-    int16_t w_ = 0;
+    int16_t logicalW_ = 0; // the canvas the UI draws to, before rotation
+    int16_t logicalH_ = 0;
+    int16_t w_ = 0; // the canvas after rotation -- what width()/height() report
     int16_t h_ = 0;
+    int16_t blitW_ = 0; // the aperture rect inside the panel
+    int16_t blitH_ = 0;
+    int16_t offsetX_ = 0;
+    int16_t offsetY_ = 0;
     uint8_t rotation_ = 0;
     uint8_t brightness_ = 0;
 
@@ -172,6 +249,19 @@ private:
     bool failed_ = false;
     bool canvasReady_ = false;
     bool backlightAttached_ = false;
+    // True while present() flips between fb_[0] and fb_[1]. Cleared only by the stall watchdog in
+    // present(), which drops back to the single-buffer write this backend used before -- slower to
+    // look at, but never a frozen screen.
+    bool doubleBuffered_ = false;
+    // Set once the first frame-boundary flip has been observed and logged -- see present().
+    bool flipLogged_ = false;
+    // When the present in flight asked for its flip. Only meaningful while the ISR-side
+    // s_swapPending is set, which is what makes it safe to compare without initialisation games.
+    uint32_t swapAskedMs_ = 0;
+    // panelToCanvas rejects a tap outside the rect; the first rejection is logged with its raw
+    // coordinates and the rest are silent, since this runs per touch and would otherwise flood.
+    // Mutable because panelToCanvas is const -- the flag is bookkeeping about logging, not state.
+    mutable bool loggedReject_ = false;
     const char* lastError_ = "";
     uint32_t lastPresentMs_ = 0;
 };

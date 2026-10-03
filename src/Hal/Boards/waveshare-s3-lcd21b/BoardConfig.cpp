@@ -15,7 +15,7 @@
 #include "Hal/Display/EspLcdRgbDisplay.h"
 #include "BoardConfig.h"
 #include "Settings/TouchDriver.h"
-#include <SD.h>
+#include <SD_MMC.h>
 #include "FileSystem/FileSystem.h"
 
 // The panel's backlight is on GPIO6, driven by the backend over LEDC.
@@ -33,7 +33,12 @@ static constexpr int kBacklightPin = 6;
 
 // Global display instance. Unlike every other board, this one is NOT a TftEspiDisplay: the backend
 // owns the RGB panel, the ST7701 init sequence, the TCA9554 expander and the backlight.
-static EspLcdRgbDisplay s_display(KRYONOS_DISPLAY_WIDTH, KRYONOS_DISPLAY_HEIGHT, kBacklightPin);
+//
+// The two size pairs are different arguments because they are different things: BOARD_PANEL_* is the
+// scan size the ST7701's timings come from, KRYONOS_DISPLAY_* is the logical canvas the UI draws to
+// and is scaled up into that panel. Passing the canvas as the panel size would rewrite the timings.
+static EspLcdRgbDisplay s_display(BOARD_PANEL_W, BOARD_PANEL_H, KRYONOS_DISPLAY_WIDTH,
+                                  KRYONOS_DISPLAY_HEIGHT, kBacklightPin);
 KryonDisplay& tft = s_display;
 
 // Capabilities
@@ -100,23 +105,52 @@ void initTouch(void) {
     TouchDriver::init(&tft);
 }
 
-// SD Card
+// SD Card -- SDMMC 1-bit on CLK=GPIO2, CMD=GPIO1, D0=GPIO42.
 //
-// This board has a micro-SD slot on SPI, wired to the SAME GPIO1/GPIO2 pair the panel's 3-wire
-// command bus uses for SDA/SCL. Those pins are free once the ST7701 init sequence has been sent
-// (the backend bit-bangs it during init() and then releases them), so a future pass can mount here
-// after display init. Until that is written and tested, report "no card" rather than driving pins
-// that would disturb the bus.
+// GPIO1/GPIO2 are shared with the ST7701's 3-wire command channel, which the display backend
+// bit-bangs during panel bring-up and then hands back. That is why this must run after the panel is
+// up -- and FileSystem::init(), which calls this, is several steps below Display::begin() in
+// main.cpp. Mounting before that would fight the command bus; mounting during it would corrupt the
+// init table.
+//
+// The slot wires only DAT0, so it is 1-bit and cannot be driven by the SPI `SD` class (there is no
+// chip-select line). Every failure path returns nullptr instead of aborting: this board is meant to
+// stay reachable with no card in the slot.
 fs::FS* initSD(void) {
-    Serial.println("[Board Waveshare S3 LCD2.1B] SD card support is not implemented on this board yet.");
-    return nullptr;
+    if (SD_MMC.cardType() != CARD_NONE) return &SD_MMC; // already mounted
+
+    SD_MMC.setPins(BOARD_SD_CLK_PIN, BOARD_SD_CMD_PIN, BOARD_SD_D0_PIN);
+
+    // mode1bit = true (only DAT0 is wired). format_if_mount_failed stays false: a failed mount must
+    // never reformat a card that may hold the user's data.
+    if (!SD_MMC.begin("/sd", true)) {
+        Serial.println("[Board Waveshare S3 LCD2.1B] SD mount failed (card inserted? FAT32?)");
+        return nullptr;
+    }
+    if (SD_MMC.cardType() == CARD_NONE) {
+        Serial.println("[Board Waveshare S3 LCD2.1B] SD mounted but no card detected");
+        SD_MMC.end();
+        return nullptr;
+    }
+
+    Serial.printf("[Board Waveshare S3 LCD2.1B] SD mounted: %llu MB\n",
+                  static_cast<unsigned long long>(SD_MMC.cardSize() / (1024 * 1024)));
+    return &SD_MMC;
 }
 
-void deinitSD(void) {}
+void deinitSD(void) {
+    if (SD_MMC.cardType() != CARD_NONE) SD_MMC.end();
+}
 
-uint64_t getSDTotalBytes(void) { return 0; }
-uint64_t getSDUsedBytes(void) { return 0; }
-bool isSDMounted(void) { return false; }
+uint64_t getSDTotalBytes(void) {
+    return SD_MMC.cardType() == CARD_NONE ? 0 : SD_MMC.totalBytes();
+}
+
+uint64_t getSDUsedBytes(void) {
+    return SD_MMC.cardType() == CARD_NONE ? 0 : SD_MMC.usedBytes();
+}
+
+bool isSDMounted(void) { return SD_MMC.cardType() != CARD_NONE; }
 
 // Keyboard Dummies
 BoardKey getKeyInput(void) { return BOARD_KEY_NONE; }

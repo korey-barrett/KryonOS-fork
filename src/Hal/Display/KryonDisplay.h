@@ -85,6 +85,26 @@ public:
      */
     virtual TFT_eSPI* nativeTft() { return nullptr; }
 
+    // --- Panel-to-canvas mapping ------------------------------------------------------------
+    /**
+     * Map a PANEL pixel to the logical canvas the UI draws to, writing the result through the
+     * out-parameters and returning false for a point outside the drawn area.
+     *
+     * A backend whose canvas IS its panel -- every write-through one -- maps 1:1, so this has a
+     * default implementation rather than being pure virtual. A backend that draws its canvas
+     * somewhere other than the panel's full extent (EspLcdRgbDisplay, which scales a 240x320 canvas
+     * into the inscribed rect of a 480x480 round panel) overrides it.
+     *
+     * This exists so the touch path can invert the SAME transform the blit applies, instead of
+     * keeping a second copy of the scale and offset that can silently drift from it. The backend is
+     * the only owner of the mapping: it supplies both directions, and neither caller re-derives it.
+     */
+    virtual bool panelToCanvas(int32_t px, int32_t py, int32_t* cx, int32_t* cy) const {
+        *cx = px;
+        *cy = py;
+        return true;
+    }
+
     // --- Frame presentation -----------------------------------------------------------------
     /**
      * Push any pending drawing to the panel. A backend that writes straight through to its

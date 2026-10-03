@@ -4,16 +4,22 @@
 
 #include "Hal/Display/EspLcdRgbDisplay.h"
 
-#include <esp32-hal-ledc.h>
-#include <esp_heap_caps.h>
-
-#include "Hal/I2C/I2CEngine.h"
-#include "Hal/I2C/Tca9554.h"
-
 // The whole implementation is compiled only where ESP-IDF ships the RGB panel driver, matching the
 // guard in the header. For every other environment this translation unit is empty: PlatformIO
 // compiles all of src/ for all envs, so without this `pio run -e esp32-default` cannot link.
+//
+// The IDF headers have to sit INSIDE this guard, not above it: esp_lcd_panel_rgb.h and esp_cache.h
+// do not exist in a classic-ESP32 build at all, so an unconditional include here is what breaks
+// `esp32-default` even though nothing below it is ever compiled there.
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ARDUINO_ESP32S3_DEV)
+
+#include <esp32-hal-ledc.h>
+#include <esp_cache.h>
+#include <esp_lcd_panel_ops.h>
+#include <esp_lcd_panel_rgb.h>
+
+#include "Hal/I2C/I2CEngine.h"
+#include "Hal/I2C/Tca9554.h"
 
 static_assert(!__is_abstract(EspLcdRgbDisplay),
               "EspLcdRgbDisplay must implement every KryonDisplay pure virtual");
@@ -51,8 +57,52 @@ constexpr uint32_t kBacklightFreq = 25000;
 constexpr uint8_t kBacklightBits = 10;
 constexpr uint32_t kBacklightMaxDuty = (1u << kBacklightBits) - 1u;
 
-// A redraw-every-iteration UI must not saturate loop() with 460 KB blits.
-constexpr uint32_t kMinPresentIntervalMs = 33;
+// A redraw-every-iteration UI must not saturate loop() with full-aperture blits. 20 Hz matches the
+// previous port's CANVAS_FLUSH_HZ, and it caps how much PSRAM bandwidth a busy UI can take from the
+// panel's bounce-buffer refill, which is itself reading PSRAM.
+constexpr uint32_t kMinPresentIntervalMs = 50;
+
+// A presented framebuffer is adopted by the scanout at the next frame boundary, ~17 ms later at this
+// panel's 58.5 Hz. Half a second of no boundary means the frame-complete interrupt is not arriving
+// at all, and the handshake below would otherwise block every present forever -- a frozen screen
+// being a far worse failure than the tearing this backend exists to remove.
+constexpr uint32_t kSwapStallMs = 500;
+
+// --- Double buffering ---------------------------------------------------------------------------
+//
+// Handing esp_lcd_panel_draw_bitmap a pointer that IS one of the driver's framebuffers is what makes
+// the driver adopt it: rgb_panel_draw_bitmap recognises the pointer, sets `cur_fb_index` and copies
+// nothing. With a bounce buffer configured, the scanout then follows through `bb_fb_index` latching
+// to `cur_fb_index` at the bounce-position wrap -- that is the only channel by which framebuffer 1 can
+// reach the glass on ESP32-S3, for the restart-link reason spelled out in setUpPanel.
+//
+// Two framebuffers, rather than the single one the reference port uses, so that a blit targets the
+// buffer the scanout is not reading. The residual tear is that the latch is only sometimes on the
+// right side of the VSYNC; see setUpPanel for the arithmetic and present() for the handshake.
+//
+// The deferred flip is the one hazard, and the handshake below is exactly it: between presenting
+// framebuffer B and the boundary that adopts it, framebuffer A is still on screen and must not be
+// written. These are file-scope rather than members because the frame-complete callback runs in the
+// GDMA ISR and there is one RGB panel per board.
+static volatile uint8_t s_scanIdx = 0;    // the framebuffer the scanout is reading
+static volatile uint8_t s_pendingIdx = 0; // the framebuffer presented, not yet adopted
+static volatile bool s_swapPending = false;
+// How many flips the scanout has actually adopted. present() logs the first one, because "the panel
+// came up double buffered" and "the flip mechanism works" are different claims and only the second
+// one means anything for tearing. Nothing else reads it.
+static volatile uint32_t s_flipCount = 0;
+
+// IRAM_ATTR: the driver requires it when CONFIG_LCD_RGB_ISR_IRAM_SAFE is on, and this runs from the
+// end-of-frame interrupt regardless. It must not log, allocate or block.
+static IRAM_ATTR bool rgbFrameBufComplete(esp_lcd_panel_handle_t,
+                                          const esp_lcd_rgb_panel_event_data_t*, void*) {
+    if (s_swapPending) {
+        s_scanIdx = s_pendingIdx;
+        s_swapPending = false;
+        s_flipCount++;
+    }
+    return false;
+}
 
 // --- Panel wiring (from the vendor's board_peripherals.yaml) ------------------------------------
 constexpr int kDePin = 40;
@@ -194,17 +244,27 @@ void cmdCommand(uint8_t cmd, const uint8_t* data, uint8_t len) {
 // Lifecycle
 // =================================================================================================
 
-EspLcdRgbDisplay::EspLcdRgbDisplay(int16_t nativeWidth, int16_t nativeHeight, int backlightPin)
+EspLcdRgbDisplay::EspLcdRgbDisplay(int16_t nativeWidth, int16_t nativeHeight, int16_t logicalWidth,
+                                   int16_t logicalHeight, int backlightPin)
     : backlightPin_(backlightPin), nativeW_(nativeWidth), nativeH_(nativeHeight),
-      w_(nativeWidth), h_(nativeHeight) {}
+      logicalW_(logicalWidth), logicalH_(logicalHeight), w_(logicalWidth), h_(logicalHeight) {
+    // The aperture rect, derived rather than hardcoded so a different canvas cannot leave the blit
+    // and the touch transform describing different rectangles. Both edges come from the same ceiling
+    // the touch path inverts, so 240x320 lands on exactly 288x384 at offset (96,48).
+    blitW_ = static_cast<int16_t>(canvasToPanelEdge(logicalW_));
+    blitH_ = static_cast<int16_t>(canvasToPanelEdge(logicalH_));
+    offsetX_ = static_cast<int16_t>((nativeW_ - blitW_) / 2);
+    offsetY_ = static_cast<int16_t>((nativeH_ - blitH_) / 2);
+}
 
 EspLcdRgbDisplay::~EspLcdRgbDisplay() {
     if (canvas_.created()) canvas_.deleteSprite();
-    if (staging_) {
-        free(staging_);
-        staging_ = nullptr;
-    }
     if (panel_) {
+        // Stop the handshake before the interrupts behind it go away, so nothing is left waiting on
+        // a boundary that will never arrive. The callback itself touches only file-scope flags, so it
+        // is safe even if it fires once more while the panel is being torn down.
+        s_swapPending = false;
+        doubleBuffered_ = false;
         esp_lcd_panel_del(panel_);
         panel_ = nullptr;
     }
@@ -214,14 +274,35 @@ void EspLcdRgbDisplay::init(uint8_t tc) {
     (void)tc;
     if (panel_) return; // idempotent: Display::begin() may run more than once
 
-    Serial.printf("[Display:rgb] bringing up a %dx%d ST7701 RGB panel (blit swap %s)\n",
+    Serial.printf("[Display:rgb] bringing up a %dx%d ST7701 RGB panel; canvas %dx%d -> %dx%d "
+                  "aperture at +%d+%d (blit swap %s)\n",
                   static_cast<int>(nativeW_), static_cast<int>(nativeH_),
+                  static_cast<int>(logicalW_), static_cast<int>(logicalH_),
+                  static_cast<int>(blitW_), static_cast<int>(blitH_),
+                  static_cast<int>(offsetX_), static_cast<int>(offsetY_),
 #if KRYONOS_RGB_BLIT_SWAP
                   "on"
 #else
                   "off"
 #endif
     );
+
+    // The aperture is only the inscribed rect of the circle at the scale this build assumes. A
+    // canvas whose scaled rect corners fall outside the bezel loses content to the round edge, and
+    // that is invisible on a desk -- so say so once, at bring-up, with the numbers that prove it.
+    if (blitW_ > nativeW_ || blitH_ > nativeH_) {
+        Serial.printf("[Display:rgb] WARNING: the %dx%d aperture does not fit the %dx%d panel\n",
+                      static_cast<int>(blitW_), static_cast<int>(blitH_),
+                      static_cast<int>(nativeW_), static_cast<int>(nativeH_));
+    }
+    {
+        const int32_t hx = blitW_ / 2, hy = blitH_ / 2;
+        const int32_t r = nativeW_ < nativeH_ ? nativeW_ / 2 : nativeH_ / 2;
+        if (hx * hx + hy * hy > r * r) {
+            Serial.printf("[Display:rgb] WARNING: the aperture's corners (+-%d,+-%d) fall outside "
+                          "the %d px bezel; the round edge will cut content\n", hx, hy, r);
+        }
+    }
 
     if (!setUpCanvas()) {
         failed_ = true;
@@ -245,31 +326,57 @@ void EspLcdRgbDisplay::init(uint8_t tc) {
         return;
     }
 
-    // The panel is now scanning, but PSRAM holds uninitialised bytes: clear and push one frame
-    // BEFORE the backlight comes on, so the user never sees noise.
+    // The panel is now scanning, but PSRAM holds uninitialised bytes: blacken BOTH framebuffers and
+    // push one frame BEFORE the backlight comes on, so the user never sees noise. The clear is also
+    // what makes the surround permanent -- it paints everything outside the aperture rect once, in
+    // every buffer the scanout can ever reach, so a seam landing there has nothing to show.
     fillScreen(0x0000);
-    blit();
+    clearFrameBuffer();
+
+    // The first frame goes straight into framebuffer 0, which is the one the scanout starts on
+    // (`cur_fb_index` and `bb_fb_index` both begin at 0). Drawing into the buffer it is already
+    // reading cannot tear anything the user has seen -- the backlight is still off -- and it leaves
+    // the handshake at its initial state, so the first present() flips to framebuffer 1.
+    if (fb_[0]) {
+        blitInto(static_cast<uint16_t*>(fb_[0]));
+        esp_lcd_panel_draw_bitmap(panel_, 0, 0, nativeW_, nativeH_, fb_[0]);
+    }
     dirty_ = false;
     lastPresentMs_ = millis();
 
     setBacklight(255);
 
-    Serial.printf("[Display:rgb] panel ready (canvas %p, %u bytes; staging %u bytes). "
+    Serial.printf("[Display:rgb] panel ready (canvas %p, %u bytes; %dx%d at +%d+%d; %s). "
                   "Backlight on GPIO%d at %u Hz.\n",
                   canvas_.getPointer(),
-                  static_cast<unsigned>(static_cast<size_t>(nativeW_) * nativeH_ * 2),
-                  static_cast<unsigned>(static_cast<size_t>(nativeW_) * nativeH_ * 2),
+                  static_cast<unsigned>(static_cast<size_t>(logicalW_) * logicalH_ * 2),
+                  static_cast<int>(blitW_), static_cast<int>(blitH_),
+                  static_cast<int>(offsetX_), static_cast<int>(offsetY_),
+                  doubleBuffered_ ? "double buffered" : "single buffered",
                   backlightPin_, static_cast<unsigned>(kBacklightFreq));
 }
 
 void EspLcdRgbDisplay::setRotation(uint8_t rotation) {
-    rotation_ = rotation & 0x03;
-    // The sprite is deliberately NOT rotated: the canvas stays in panel scan order and the rotation
-    // is applied to the finished frame in blit(). That keeps every draw call in one coordinate
-    // space and avoids depending on TFT_eSprite's own rotation handling.
-    bool landscape = (rotation_ & 1) != 0;
-    w_ = landscape ? nativeH_ : nativeW_;
-    h_ = landscape ? nativeW_ : nativeH_;
+    // The aperture rect's offset and the touch transform are both derived from rotation 0, so a
+    // rotation here would move the canvas inside the panel while the touch path kept mapping to
+    // where it used to be. Ignoring it is the safe failure; rotating would mean deriving the
+    // aperture from the rotation too, which nothing on this board asks for.
+    if ((rotation & 0x03) != 0) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            Serial.printf("[Display:rgb] rotation %u ignored: the %dx%d aperture and the touch "
+                          "transform are both defined at rotation 0\n",
+                          static_cast<unsigned>(rotation & 0x03), static_cast<int>(blitW_),
+                          static_cast<int>(blitH_));
+        }
+        return;
+    }
+    // The sprite is deliberately NOT rotated: the canvas stays in one coordinate space, which is
+    // what lets width()/height() be the layout's source of truth without any draw call knowing.
+    rotation_ = 0;
+    w_ = logicalW_;
+    h_ = logicalH_;
 }
 
 uint8_t EspLcdRgbDisplay::getRotation() { return rotation_; }
@@ -283,13 +390,18 @@ bool EspLcdRgbDisplay::ready() const { return panel_ != nullptr && canvasReady_ 
 // =================================================================================================
 
 bool EspLcdRgbDisplay::setUpCanvas() {
-    // 16 bpp so the sprite is exactly the panel's colour format: 480*480*2 = 460,800 bytes, which
-    // only fits in PSRAM. TFT_eSprite gates its PSRAM allocator behind CONFIG_SPIRAM_SUPPORT (the
-    // Arduino-ESP32 core names the same setting CONFIG_SPIRAM), so the env defines it; without that
-    // define this createSprite() falls back to an internal calloc that cannot succeed and every
-    // draw becomes a silent no-op -- hence the explicit check and message here.
+    // 16 bpp so the sprite is exactly the panel's colour format: 240*320*2 = 153,600 bytes, which
+    // only fits in PSRAM. The sprite is the LOGICAL canvas, not the panel: every draw call writes
+    // 1:1 into it at 240x320, and blitInto() is the only thing that knows the panel is bigger. Sizing
+    // it to the panel instead would give the UI a 480x480 coordinate space again, which is the
+    // layout the round bezel was cutting.
+    //
+    // TFT_eSprite gates its PSRAM allocator behind CONFIG_SPIRAM_SUPPORT (the Arduino-ESP32 core
+    // names the same setting CONFIG_SPIRAM), so the env defines it; without that define this
+    // createSprite() falls back to an internal calloc that cannot succeed and every draw becomes a
+    // silent no-op -- hence the explicit check and message here.
     canvas_.setColorDepth(16);
-    void* buf = canvas_.createSprite(nativeW_, nativeH_);
+    void* buf = canvas_.createSprite(logicalW_, logicalH_);
     if (!buf || !canvas_.created()) {
         lastError_ = "16bpp sprite allocation failed (needs PSRAM + CONFIG_SPIRAM_SUPPORT=1)";
         return false;
@@ -301,16 +413,6 @@ bool EspLcdRgbDisplay::setUpCanvas() {
     // on the way in, or it would come out of present() swapped twice. The sprite does that when its
     // _swapBytes flag is set, which is this backend's default.
     canvas_.setSwapBytes(true);
-
-    size_t bytes = static_cast<size_t>(nativeW_) * static_cast<size_t>(nativeH_) * sizeof(uint16_t);
-    staging_ = static_cast<uint16_t*>(heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM));
-    if (!staging_) staging_ = static_cast<uint16_t*>(malloc(bytes));
-    if (!staging_) {
-        lastError_ = "could not allocate the blit staging buffer";
-        canvas_.deleteSprite();
-        canvasReady_ = false;
-        return false;
-    }
 
     return true;
 }
@@ -377,7 +479,34 @@ bool EspLcdRgbDisplay::setUpPanel() {
     cfg.clk_src = LCD_CLK_SRC_DEFAULT;
     cfg.data_width = 16;
     cfg.bits_per_pixel = 16;
-    cfg.num_fbs = 2; // double buffered: draw_bitmap fills the back buffer, vsync swaps it
+    // TWO framebuffers AND a bounce buffer. Both are load-bearing on this chip, and the reason is an
+    // ESP32-S3-only hardware workaround in the driver:
+    //
+    //   #if CONFIG_IDF_TARGET_ESP32S3
+    //   #define RGB_LCD_NEEDS_SEPARATE_RESTART_LINK 1
+    //
+    // With that set, lcd_rgb_panel_init_trans_link mounts the restart link on `fbs[0]` -- or, when a
+    // bounce buffer exists, on `bounce_buffer[0]` -- and lcd_rgb_panel_try_restart_transmission
+    // restarts the GDMA from it at EVERY VSYNC in stream mode. So the scanout is anchored: every field
+    // begins at fbs[0].
+    //
+    // That is why the bounce buffer cannot be dropped. Without it there is no way to show framebuffer
+    // 1 at all: the VSYNC restart re-enters at fbs[0] on every field, so a page flip to fb_[1] is
+    // overwritten 58 times a second. Measured on hardware -- with bounce_buffer_size_px = 0 the panel
+    // came up "double buffered", the flip callback fired, and the screen stayed BLACK, because
+    // fb_[0] still held the black bring-up frame while the UI had been blitted into fb_[1].
+    //
+    // With the bounce buffer present the restart link points at the bounce buffer instead, and
+    // `bb_fb_index` -- not cur_fb_index -- decides which framebuffer is copied into it. That is the
+    // only channel through which fb_[1] can reach the glass on this chip, so the bounce buffer stays.
+    //
+    // The catch, and it is the residual tear: bb_fb_index re-latches to cur_fb_index only when
+    // `bounce_pos_px` wraps, while the VSYNC ISR resets `bounce_pos_px` to 0 whenever it exceeds two
+    // bounce buffers' worth (lcd_rgb_panel_try_restart_transmission's desync branch) and pre-fills
+    // both buffers. A frame is 230400 px and a bounce buffer is 4800 px, so a field is only ~48 fills
+    // long against a wrap that needs ~46 -- the wrap, and therefore the flip, lands on the right side
+    // of the VSYNC only sometimes. That is why the tear came and went. See the note in present().
+    cfg.num_fbs = 2;
     cfg.bounce_buffer_size_px = 4800;
     cfg.dma_burst_size = 64;
 
@@ -408,6 +537,32 @@ bool EspLcdRgbDisplay::setUpPanel() {
         Serial.printf("[Display:rgb] esp_lcd_new_rgb_panel -> %s\n", esp_err_to_name(err));
         return false;
     }
+
+    // The frame-complete callback is the only thing that can advance the handshake, so a failure to
+    // register it is a bring-up failure rather than something to limp along without: the panel would
+    // show the first frame and then never change again.
+    esp_lcd_rgb_panel_event_callbacks_t cbs = {};
+    cbs.on_frame_buf_complete = rgbFrameBufComplete;
+    err = esp_lcd_rgb_panel_register_event_callbacks(panel_, &cbs, nullptr);
+    if (err != ESP_OK) {
+        lastError_ = "esp_lcd_rgb_panel_register_event_callbacks failed";
+        Serial.printf("[Display:rgb] esp_lcd_rgb_panel_register_event_callbacks -> %s\n",
+                      esp_err_to_name(err));
+        return false;
+    }
+
+    err = esp_lcd_rgb_panel_get_frame_buffer(panel_, 2, &fb_[0], &fb_[1]);
+    if (err != ESP_OK || !fb_[0] || !fb_[1]) {
+        lastError_ = "esp_lcd_rgb_panel_get_frame_buffer(2) failed";
+        Serial.printf("[Display:rgb] could not take hold of both framebuffers (%s)\n",
+                      esp_err_to_name(err));
+        return false;
+    }
+
+    s_scanIdx = 0;
+    s_pendingIdx = 0;
+    s_swapPending = false;
+    doubleBuffered_ = true;
 
     err = esp_lcd_panel_reset(panel_);
     if (err != ESP_OK) {
@@ -452,51 +607,183 @@ void EspLcdRgbDisplay::setBacklight(uint8_t brightness) {
 // =================================================================================================
 
 void EspLcdRgbDisplay::present() {
-    if (!panel_ || !staging_ || !canvasReady_ || !dirty_) return;
+    const uint32_t now = millis();
 
-    uint32_t now = millis();
+    if (!panel_ || !canvasReady_ || !dirty_ || !fb_[0]) return;
+
+    if (doubleBuffered_ && s_swapPending) {
+        // The flip asked for by the last present has not reached a frame boundary yet, so the
+        // framebuffer we would draw into next is still on screen. Wait for the boundary rather than
+        // write through the picture, and give up on the handshake if it never arrives -- see
+        // kSwapStallMs.
+        if (now - swapAskedMs_ <= kSwapStallMs) return;
+
+        doubleBuffered_ = false;
+        s_swapPending = false;
+        s_scanIdx = 0; // a dead callback means the scanout never left framebuffer 0
+        Serial.printf("[Display:rgb] no frame boundary in %u ms; falling back to single buffering "
+                      "(expect tearing, but the screen keeps updating)\n",
+                      static_cast<unsigned>(kSwapStallMs));
+    }
+
     if (now - lastPresentMs_ < kMinPresentIntervalMs) return;
+
+    // One line, once, the first time the scanout actually adopts a presented buffer. Without it a
+    // boot log that says "double buffered" would still leave the question this whole change is about
+    // open: whether the boundary callback ever fires. If this line is missing from a log whose screen
+    // has been redrawn, the flip is not happening -- and the stall watchdog above will have said so.
+    if (doubleBuffered_ && !flipLogged_ && s_flipCount > 0) {
+        flipLogged_ = true;
+        Serial.printf("[Display:rgb] frame-boundary flip confirmed after %u presents; the blit no "
+                      "longer races the scanout.\n", static_cast<unsigned>(s_flipCount));
+    }
+
+    // Double buffered: the buffer the scanout is NOT reading. Single: framebuffer 0, which is the one
+    // the scanout stays on when there is no second buffer to flip to.
+    const uint8_t back = doubleBuffered_ ? static_cast<uint8_t>(1u - s_scanIdx) : 0u;
+    uint16_t* dst = static_cast<uint16_t*>(fb_[back]);
+    if (!dst) return;
+
+    blitInto(dst);
+
+    // Handing the driver a pointer that IS one of its own framebuffers is what makes it adopt this
+    // buffer: rgb_panel_draw_bitmap recognises it, sets cur_fb_index and copies nothing. The bounce
+    // refill then picks the new buffer up when bb_fb_index re-latches at the wrap -- see setUpPanel.
+    //
+    // Called on EVERY present, the single-buffer fallback included. In that mode it is what keeps
+    // cur_fb_index, and therefore bb_fb_index, on the framebuffer being written, so the screen goes on
+    // updating -- tearing, as the fallback's own log line says -- rather than going stale while the CPU
+    // draws into a buffer the bounce refill is not reading. It must stay AFTER blitInto and BEFORE the
+    // flag: s_swapPending set after this call is what makes the boundary race resolve safely.
+    esp_lcd_panel_draw_bitmap(panel_, 0, 0, nativeW_, nativeH_, fb_[back]);
+
+    if (doubleBuffered_) {
+        s_pendingIdx = back;
+        s_swapPending = true;
+        swapAskedMs_ = now;
+    }
 
     dirty_ = false;
     lastPresentMs_ = now;
-    blit();
 }
 
-void EspLcdRgbDisplay::blit() {
-    if (!panel_ || !staging_) return;
+void EspLcdRgbDisplay::clearFrameBuffer() {
+    if (!panel_ || !fb_[0]) return;
+
+    // EVERY framebuffer, not just the first: once the double-buffer handshake starts flipping, the
+    // scanout can reach either one, and the surround outside the aperture rect is only permanent if
+    // both were painted black while the backlight was still off.
+    const size_t bytes = static_cast<size_t>(nativeW_) * nativeH_ * sizeof(uint16_t);
+    bool synced = true;
+    for (size_t i = 0; i < 2 && fb_[i]; i++) {
+        // Zero is black in either byte order, so this needs no swap.
+        memset(fb_[i], 0, bytes);
+        synced &= esp_cache_msync(static_cast<uint8_t*>(fb_[i]), bytes,
+                                  ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED) ==
+                  ESP_OK;
+    }
+    if (!synced) {
+        Serial.println("[Display:rgb] the bring-up framebuffer clear did not reach PSRAM; the "
+                       "surround may flash until the next full frame.");
+    }
+}
+
+void EspLcdRgbDisplay::blitInto(uint16_t* dst) {
+    if (!dst || !canvasReady_) return;
 
     const uint16_t* src = static_cast<const uint16_t*>(canvas_.getPointer());
     if (!src) return;
 
-    const int32_t W = nativeW_;
-    const int32_t H = nativeH_;
-    const size_t pixels = static_cast<size_t>(W) * static_cast<size_t>(H);
+    // This writes the framebuffer's pixels directly instead of handing esp_lcd_panel_draw_bitmap a
+    // staging buffer to copy. Presenting through a copy would need a full 480x480 = 230,400 pixel
+    // pass per frame; driving the aperture rect directly is 288x384 = 110,592. The cost of owning the
+    // framebuffer is owning its cache maintenance, which is what the esp_cache_msync at the end is
+    // for.
+    const int32_t dstStride = nativeW_; // the PANEL's width: the rect is a band inside it
 
+    const int32_t dxFirst = offsetX_;
+    const int32_t dyFirst = offsetY_;
+    const int32_t dxLast = offsetX_ + blitW_;
+    const int32_t dyLast = offsetY_ + blitH_;
+
+    // Nearest-neighbour 6/5 upscale, driven from the DESTINATION. Every destination pixel in the
+    // rect is written exactly once, so there are no seams by construction -- and, the reason it is
+    // done this way round, the source pixel chosen for a given destination pixel IS
+    // apertureOffsetToCanvas, the same function panelToCanvas inverts for the touch path. Forward
+    // and inverse are one expression and cannot drift.
+    //
+    // The source-driven alternative -- each source pixel painting the block [sx*6/5, (sx+1)*6/5) --
+    // tiles just as cleanly but does NOT agree with that inverse: measured across the 288
+    // destination columns, 192 of them would display a pixel one off from the one the touch
+    // transform reports.
+    for (int32_t dy = dyFirst; dy < dyLast; dy++) {
+        const int32_t sy = apertureOffsetToCanvas(dy - offsetY_);
+        const uint16_t* srow = src + static_cast<size_t>(sy) * logicalW_;
+        uint16_t* out = dst + static_cast<size_t>(dy) * dstStride + dxFirst;
+        for (int32_t dx = dxFirst; dx < dxLast; dx++) {
+            const uint16_t p = srow[apertureOffsetToCanvas(dx - offsetX_)];
 #if KRYONOS_RGB_BLIT_SWAP
-    if (rotation_ == 0 || W != H) {
-        // The square-panel rotation cases below are the only ones that can be done here; a rotated
-        // non-square RGB panel needs the controller's own swap_xy/mirror instead.
-        for (size_t i = 0; i < pixels; i++) staging_[i] = bswap16(src[i]);
-    } else {
-        // Square panel: a rotation is a pure index remap over the same buffer size.
-        for (int32_t y = 0; y < H; y++) {
-            for (int32_t x = 0; x < W; x++) {
-                int32_t dx = 0, dy = 0;
-                switch (rotation_ & 0x03) {
-                    case 1: dx = H - 1 - y; dy = x; break;              // 90 degrees clockwise
-                    case 2: dx = W - 1 - x; dy = H - 1 - y; break;      // 180 degrees
-                    default: dx = y; dy = W - 1 - x; break;             // 270 degrees clockwise
-                }
-                staging_[static_cast<size_t>(dy) * W + dx] =
-                    bswap16(src[static_cast<size_t>(y) * W + x]);
-            }
+            *out++ = bswap16(p);
+#else
+            *out++ = p;
+#endif
         }
     }
-#else
-    memcpy(staging_, src, pixels * sizeof(uint16_t));
-#endif
 
-    esp_lcd_panel_draw_bitmap(panel_, 0, 0, W, H, staging_);
+    // Coherency. The driver's own cache sync for this case is gated on there being NO bounce buffer
+    // (rgb_panel_draw_bitmap: `if (!rgb_panel->bb_size && rgb_panel->flags.fb_behind_cache)`), and
+    // this backend keeps the bounce buffer -- so the maintenance the usual route relies on does not
+    // happen. Since the framebuffer is written here directly, the cache must be pushed to PSRAM or
+    // the bounce-buffer refill reads stale data.
+    //
+    // The written region is a band of rows, each only blitW_ wide inside a nativeW_ wide
+    // framebuffer, so the rows are not contiguous and no single span of w*h pixels describes them.
+    // This syncs the bounding box in one call rather than one call per row. It over-covers the gaps
+    // between rows, which is harmless: those pixels are the black surround and nothing writes them.
+    const size_t offset = static_cast<size_t>(dyFirst) * dstStride * sizeof(uint16_t);
+    const size_t bytes = static_cast<size_t>(dyLast - dyFirst) * dstStride * sizeof(uint16_t);
+    if (esp_cache_msync(reinterpret_cast<uint8_t*>(dst) + offset, bytes,
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED) != ESP_OK) {
+        // Non-fatal: the panel may show one stale frame. One line only -- this runs per frame and
+        // would otherwise flood the console.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            Serial.println("[Display:rgb] esp_cache_msync failed -- expect a stale frame.");
+        }
+    }
+}
+
+// =================================================================================================
+// Panel-to-canvas mapping
+// =================================================================================================
+
+bool EspLcdRgbDisplay::panelToCanvas(int32_t px, int32_t py, int32_t* cx, int32_t* cy) const {
+    if (!cx || !cy) return false;
+
+    // The offsets are subtracted in PANEL space and the bounds are checked there too, BEFORE the
+    // divide. That order matters: integer division truncates toward zero, so a touch one pixel left
+    // of the rect would divide -1 by 6/5 to 0 and be accepted as a legitimate hit on the canvas's
+    // left edge. Checking first makes an out-of-rect tap a rejection instead of a phantom edge tap.
+    const int32_t bx = px - offsetX_;
+    const int32_t by = py - offsetY_;
+    if (bx < 0 || bx >= blitW_ || by < 0 || by >= blitH_) {
+        // Once, not per touch: this runs on every sample, and a controller reporting something other
+        // than panel pixels should say so on the first flash rather than present as dead touch.
+        if (!loggedReject_) {
+            loggedReject_ = true;
+            Serial.printf("[Display:rgb] touch at panel (%d,%d) is outside the %dx%d aperture at "
+                          "+%d+%d -- rejected (this logs once)\n",
+                          static_cast<int>(px), static_cast<int>(py), static_cast<int>(blitW_),
+                          static_cast<int>(blitH_), static_cast<int>(offsetX_),
+                          static_cast<int>(offsetY_));
+        }
+        return false;
+    }
+
+    *cx = apertureOffsetToCanvas(bx);
+    *cy = apertureOffsetToCanvas(by);
+    return true;
 }
 
 // =================================================================================================

@@ -204,8 +204,9 @@ The design problem is text. Every UI label is drawn through TFT_eSPI's fonts, an
 rasterizer is non-virtual, so a backend that does not use TFT_eSPI loses every glyph and every
 `textWidth()` metric that `UiLayout` depends on. (`RamFramebufferDisplay` is exactly that: a correct
 reference surface with no font.) The RGB backend therefore keeps **TFT_eSPI as a pure software
-rasterizer**: it draws into a full-screen 16bpp `TFT_eSprite` in PSRAM and blits that sprite to the
-panel, so the glyphs, metrics and anti-aliasing are pixel-identical to the SPI boards.
+rasterizer**: it draws into a 16bpp `TFT_eSprite` in PSRAM — the **logical canvas**, not the panel,
+see §2.5.1 — and blits that sprite to the panel, so the glyphs, metrics and anti-aliasing are
+pixel-identical to the SPI boards.
 
 Three details are worth knowing before touching it:
 
@@ -228,14 +229,112 @@ Three details are worth knowing before touching it:
   collide with any `TFT_*`/`TOUCH_*` macro, and this board's expander and touch controller share I²C on
   GPIO15/GPIO7. The phantom's own `TFT_WIDTH`/`TFT_HEIGHT` are not set from the environment: the
   driver's own defines set them unconditionally, so a `-D` would lose the race and only earn a
-  redefinition warning. They never matter here, because the canvas is created at the panel's native
-  size and every geometry call this backend makes goes to the sprite or to a method it implements
-  itself.
+  redefinition warning. They never matter here, because the canvas is created at the **logical
+  canvas** size (`KRYONOS_DISPLAY_*`) and every geometry call this backend makes goes to the sprite
+  or to a method it implements itself.
 
-The blit itself is the route this board's own shipped firmware takes: `esp_lcd_panel_draw_bitmap()`
-over the full frame, with two framebuffers in PSRAM and a bounce buffer. Writing into the framebuffer
-directly instead would mean owning `esp_cache_msync()` here, which is only needed by code that fills
-the framebuffer itself.
+#### 2.5.1 The round aperture (and why the canvas is not the panel)
+
+This panel is a **480 px circle**, not a square. A 480×480 canvas is therefore cut by the bezel: the
+footer bar sits at y = 445 and spans x 8→472, but at y=445 the circle spans only x 165→315, so the
+footer's UP and DN thirds are physically outside the glass and cannot be touched at all. Both header
+corners go the same way.
+
+So the canvas is deliberately **smaller than the panel** on this board, and the backend scales it up
+into the largest rectangle that fits the circle:
+
+| | value |
+|---|---|
+| panel (scan size) | 480×480, `BOARD_PANEL_W`/`BOARD_PANEL_H` |
+| logical canvas | 240×320, `KRYONOS_DISPLAY_*` |
+| scale | 6/5 uniform (`SCALE_NUM`/`SCALE_DEN`) |
+| blitted rect | 288×384 at offset (96, 48) |
+| half-diagonal | √(144² + 192²) = 240 px — the bezel radius, exactly |
+
+6/5 is the largest uniform scale whose corners land on the circle, and it is not a round number by
+chance: a 240×320 canvas has a half-diagonal of 200 px, so it can grow to 200 × 6/5 = 240. Larger
+scales are cut, and they go fast — at 1.4× only the middle 51% of the top edge is still inside the
+circle, and at 1.5× the entire top and bottom edges fall outside it, taking the footer with them.
+
+Because the canvas is 240×320, `UiLayout`, the ~91 `M()` call sites and every screen lay out exactly
+as they do on the reference boards, and `UiLayout::compute` needs no special case for this board. The
+only code that knows the panel is bigger is the backend.
+
+**One transform, two consumers.** The blit upscales canvas→panel, and touch has to invert it. Rather
+than keep a second copy of the scale and offset in the touch driver — which drifts from the blit the
+first time one side changes — the backend owns both directions and publishes the inverse as
+`KryonDisplay::panelToCanvas()`:
+
+```cpp
+// Forward (blit, destination-driven):
+//   source column for panel offset dx  =  (dx - OFFSET_X) * 5 / 6
+// Inverse (touch):
+//   canvas pixel for panel pixel px    =  (px - OFFSET_X) * 5 / 6
+//                                        -- the same expression, one implementation
+```
+
+Three rules make it correct, and all three are easy to get subtly wrong:
+
+- **Both edges come from the ceiling**, not the floor: `canvasToPanelEdge(c) = (c*6 + 4)/5`. The floor
+  is the natural thing to write and it names a panel pixel that displays `c − 1`.
+- **Bounds are checked in rect space, BEFORE the divide.** Integer division truncates toward zero, so
+  a tap one pixel left of the rect would divide `-1` by `6/5` to `0` and be accepted as a legitimate
+  hit on the canvas's left edge. A tap outside the rect returns false and is logged once with its raw
+  coordinates, because a controller reporting something other than panel pixels should say so on the
+  first flash rather than present as dead touch.
+- **The blit is destination-driven.** Every destination pixel in the rect is written exactly once, so
+  there are no seams by construction — and the source pixel chosen for a destination pixel *is*
+  `panelToCanvas()`. The source-driven alternative tiles just as cleanly but does not agree with the
+  inverse: measured across the 288 destination columns, 192 of them would display a pixel one off from
+  the one the touch transform reports.
+
+`Display::width()`/`height()` report the **canvas** (240×320), so `Display::begin()`'s
+canvas-vs-flag check stays silent. `EspLcdRgbDisplay::setRotation()` refuses a non-zero rotation on
+this board and says so once: the aperture offset and the touch transform are both derived at
+rotation 0, so rotating would move the canvas inside the panel while touch kept mapping to where it
+used to be.
+
+#### 2.5.2 The blit, and the tear seam
+
+The blit writes the panel's framebuffer **directly**, through
+`esp_lcd_rgb_panel_get_frame_buffer()`, and then hands *that pointer* to `esp_lcd_panel_draw_bitmap()`
+to present it. Both halves matter, and the reason is the frame buffer index:
+
+- `rgb_panel_draw_bitmap()` copies into `fbs[cur_fb_index]` — the buffer the panel is scanning **at
+  that instant**. Passing it a pointer that *is* one of its own framebuffers takes the other branch:
+  it sets `cur_fb_index` to that buffer and copies nothing.
+- The bounce-buffer fill routine (`lcd_rgb_panel_fill_bounce_buffer()`) reads from `fbs[bb_fb_index]`,
+  and re-latches that index from `cur_fb_index` only when the bounce position wraps — **once per
+  frame, at the frame boundary**.
+
+So a bounce buffer and double buffering are not in conflict — they compose, and that is what this
+backend now relies on. `num_fbs = 2` (the driver's own docs call it `double_fb`), the bounce buffer
+kept, and present() alternates buffers: `cur_fb_index` changes the instant `draw_bitmap()` returns,
+while the scanout follows at the next boundary. That is a page flip no seam can show, with the DMA
+still reading internal SRAM rather than PSRAM. The **deferred** flip is the one hazard — between
+presenting buffer B and the boundary that adopts it, buffer A is still on screen — so present()
+refuses to draw again while a flip is outstanding, and a frame-complete callback registered on the
+panel clears that flag. If no boundary arrives in 500 ms the handshake is abandoned for the old
+single-buffer write, because a frozen screen is a far worse failure than tearing.
+
+An earlier revision of this backend ran `num_fbs = 1` and wrote into the live scanout buffer, on the
+theory that a bounce buffer and a second framebuffer could not be combined. The reported symptom —
+a thin 1-pixel line sweeping the screen, appearing only once the UI started redrawing — is exactly
+what writing the buffer under the scan head produces. The per-frame write did stay at 110,592 px
+(288×384, not 480×480) and does now too; that halves the work, but it was never going to remove the
+race.
+
+Ownership has a cost: because the framebuffer is written directly, `draw_bitmap()`'s internal PSRAM
+writeback — the maintenance the usual route relies on — never happens. That sync is gated on there
+being *no* bounce buffer (`if (!rgb_panel->bb_size && rgb_panel->flags.fb_behind_cache)`), and this
+backend keeps the bounce buffer, so `blitInto()` must `esp_cache_msync()` the written band itself. The
+band is rows of 288 px inside a 480-wide framebuffer, so no single span describes it; the call syncs
+the bounding box once rather than per row.
+
+Everything outside the rect is painted black **once**, at bring-up (`clearFrameBuffer()`), in **both**
+framebuffers — the scanout can reach either after the first flip — and never written again, because a
+seam in pixels that never change has nothing to show. Presentation is capped at 20 Hz, matching the
+previous port's flush rate.
 
 > **Trap: PlatformIO compiles every `src/*.cpp` for every environment.** A backend that includes a
 > header only some targets ship therefore breaks the *other* environments at compile time, not at link
@@ -372,6 +471,20 @@ expander itself is `src/Hal/I2C/Tca9554.{h,cpp}`, described in §2.6.
 rotate `0x01`, invert_x `0x02`, invert_y `0x04`). It survives reboot and is re-applied on boot; the
 serial `cal` command erases and re-runs calibration.
 
+A capacitive controller reports **panel** pixels, not canvas ones, and on most boards those are the
+same thing. Where they are not — the Waveshare 2.1B, whose 240×320 canvas is blitted 6/5 into a
+480×480 circle (§2.5.1) — a clamp alone would put every tap up to twice its distance off. Those
+boards' backends own the inverse transform, and the touch path asks for it:
+
+```cpp
+// Hal/Touch/CapacitiveTouchDriver.cpp — the identity backend falls through to the clamp.
+if (display && !display->panelToCanvas(nativeX, nativeY, &cx, &cy)) return false;
+```
+
+A tap outside the drawn area is a **rejection**, not a clamp: clamping would turn the black ring
+around the canvas into a band of edge taps, since the pixels a finger misses by the most are exactly
+the ones the clamp would snap inward.
+
 Because calibration is stored in **raw controller counts**, it is independent of the display
 resolution — changing `KRYONOS_DISPLAY_WIDTH/HEIGHT` does **not** invalidate it. Changing
 `KRYONOS_DISPLAY_ROTATION` **does** change how it must be interpreted, so **recalibrate after a
@@ -400,6 +513,12 @@ The logical canvas the UI draws to is `KRYONOS_DISPLAY_WIDTH × KRYONOS_DISPLAY_
 The board profile is responsible for making these agree: after `tft.setRotation(KRYONOS_DISPLAY_ROTATION)`,
 `tft.width()` must equal `KRYONOS_DISPLAY_WIDTH` (and likewise for height). `Display::begin()` snaps
 `tft.width()/height()` into runtime metrics and logs a warning when the panel disagrees with the flags.
+
+"Agree" is about the **canvas**, not the panel. On a board that scales its canvas into a larger panel
+(the Waveshare 2.1B, §2.5.1) `width()`/`height()` report the canvas, so this check stays silent while
+the panel scans out 480×480. The panel's own size is a board constant there
+(`BOARD_PANEL_W`/`BOARD_PANEL_H`), not a macro — changing `KRYONOS_DISPLAY_*` resizes the canvas and
+the aperture rect with it and never touches the panel timings.
 
 Everything downstream — UI layout, touch mapping, JS `System.screenWidth()/screenHeight()`, 3D
 transform defaults, BMP clipping — reads the runtime metrics (`Display::width()/height()`), never the
@@ -602,7 +721,7 @@ pixel-identical at 240×320 at each step:
     in passing — the OTA dismiss chip was 5px wider on the no-WiFi path than on the main path, and the
     WiFi scanner's SAVED / OPEN / SECURE tags were placed at three different x values rather than
     right-aligned in the card.
-  - **3d — Keyboard** (done). The 12×4 QWERTY grid was already reading `kb*` metrics, but on a short
+  - **3d — Keyboard** (done). The grid was already reading `kb*` metrics, but on a short
     panel those metrics themselves were unusable: 135px minus the 110px of chrome left a **6px key**.
     `UiLayout` now compresses the keyboard chrome when `h < 240` (prompt at y4, a 20px text box at y20,
     a 24px button row at y44, grid from y72) so 240×135 gets 15px keys under `fontBody` 1, and it
@@ -612,6 +731,21 @@ pixel-identical at 240×320 at each step:
     and `kbRowFromY()` are the shared draw/hit-test pair, and `MyKeyboard` no longer re-derives grid
     coordinates in its touch handler. On any panel tall enough for the whole keyset the pager strip is
     an empty rectangle and nothing about the keyboard changes.
+
+    The grid's **shape** is the one part of that block that is not a function of resolution. Key width
+    is fixed by the column count (`w / kbCols`), so a capacitive panel whose 20×52 px keys are too
+    narrow to hit cannot be fixed by scaling — the only lever is fewer columns and more rows. The
+    Waveshare 2.1B therefore declares its own shape (`KRYONOS_KB_COLS/ROWS/BUTTONS/CHAR_PAGES` in
+    `UiLayout.h`): a 6×6 grid of 40×35 px keys under six 40 px buttons, with two **character** pages
+    (letters+digits, then symbols) selected by the SYM button. `UiLayout` publishes those constants
+    rather than keeping them private so `MyKeyboard`'s key table is compiled from the same numbers the
+    cells are drawn from, and `tools/preview/layout_model.py` mirrors them per env (see `KB_SHAPE`).
+
+    Do not confuse the two kinds of page. `kbCharPages` is a different **character set**; `kbPages` is
+    a page of **rows** shown when the grid is too tall for the panel. They are independent, a board
+    uses one or the other, and `MyKeyboard::drawKeyboard` takes them as two separate arguments for
+    exactly that reason — merging them is how a short panel with a symbols page would start drawing
+    the wrong rows.
   - **3e — KryonCloud** (done). `KryonCloudUI.cpp` had 62 literal coordinate sites across nine
     sub-screens. It now carries a file-local anonymous namespace of ~30 rect helpers — nav and tabs
     (`cloudNavH`, `cloudTabRect`, `cloudTabFromX`), cards and modals (`cloudCard`, `cloudModal`,
