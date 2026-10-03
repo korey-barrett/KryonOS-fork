@@ -271,6 +271,12 @@ void KryonCloudUI::showLoadingScreen(const String& status, int progressPct) {
     tftInstance->fillRect(pctArea.x, pctArea.y, pctArea.w, pctArea.h, CLOUD_BG);
     tftInstance->setTextColor(TFT_WHITE, CLOUD_BG);
     tftInstance->drawString((String(progressPct) + "%").c_str(), pctArea.cx(), pctArea.cy(), 2);
+
+    // Flush here rather than at each of the twenty-odd call sites: every one of them draws a stage and
+    // then sits on a network call, and this is the only thing that draws those stages. Without it the
+    // cloud screens were whichever cache lines happened to be evicted while the request was in
+    // flight. See the note in MyKeyboard::getString().
+    tftInstance->present();
 }
 
 void KryonCloudUI::init(KryonDisplay *tft) {
@@ -484,6 +490,8 @@ void KryonCloudUI::startPairingInit() {
     tftInstance->setTextColor(TFT_YELLOW, CLOUD_BG);
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->drawString("Contacting Cloud Hub...", m.centerX, (int16_t)(panel.cy() - 10), 2);
+    tftInstance->present(); // every draw-then-request pair below flushes for this reason: the request
+                            // blocks, and the main loop is inside the handler that started it
 
     bool ok = KryonCloudManager::initPairingSession(activePairingCode, activePairingId,
                                                     activeChallenge, pairingExpiresIn);
@@ -675,6 +683,7 @@ void KryonCloudUI::handleOverviewTouch(uint16_t x, uint16_t y) {
         tftInstance->setTextColor(TFT_YELLOW, 0x0215);
         tftInstance->setTextDatum(MC_DATUM);
         tftInstance->drawString("Syncing...", sync.cx(), sync.cy(), 2);
+        tftInstance->present();
         KryonCloudManager::syncAllFreshData();
         drawOverviewScreen();
     } else if (unpair.contains((int16_t)x, (int16_t)y)) {
@@ -776,6 +785,10 @@ void KryonCloudUI::handleKryonAITouch(uint16_t x, uint16_t y) {
     auto repaint = [&](int scroll) {
         tftInstance->fillRect(win.x, win.y, win.w, win.h, CLOUD_CARD_BG);
         drawWrappedText(aiConsoleResponse, textX, textY, textW, textH, TFT_WHITE, 2, scroll);
+        // Flush per token: the streaming callback runs this from inside KryonCloudAI::stream(), which
+        // does not return until the answer is finished -- so this is the only chance the growing reply
+        // gets to reach the panel before it is complete. See MyKeyboard::getString().
+        tftInstance->present();
     };
     auto scrollBy = [&](int delta) {
         const int totalL = getTextLineCount(aiConsoleResponse, textW, 2);
@@ -825,6 +838,7 @@ void KryonCloudUI::handleKryonAITouch(uint16_t x, uint16_t y) {
         tftInstance->setTextColor(TFT_YELLOW, CLOUD_CARD_BG);
         tftInstance->setTextDatum(TL_DATUM);
         tftInstance->drawString("Connecting & Streaming...", textX, textY, 2);
+        tftInstance->present();
 
         aiStreamingActive = true;
         KryonCloudAI::stream(
@@ -965,6 +979,7 @@ void KryonCloudUI::drawBeamScreen() {
             tftInstance->setTextColor(TFT_YELLOW, CLOUD_BG);
             tftInstance->setTextDatum(MC_DATUM);
             tftInstance->drawString("Checking Mailbox...", m.centerX, (int16_t)(m.centerY + 20), 2);
+            tftInstance->present();
             beamInboxLoaded = KryonCloudManager::pollBeamInbox(cachedBeamMessages, 2);
             tftInstance->fillRect(0, listY, m.w, (int16_t)(cloudListBottom(m) - listY), CLOUD_BG);
         }
@@ -1009,6 +1024,7 @@ void KryonCloudUI::drawBeamScreen() {
             tftInstance->setTextColor(TFT_YELLOW, CLOUD_BG);
             tftInstance->setTextDatum(MC_DATUM);
             tftInstance->drawString("Loading #public channel...", m.centerX, (int16_t)(m.centerY + 20), 2);
+            tftInstance->present();
             beamPublicLoaded = KryonCloudManager::pollPublicBeamMessages(cachedPublicMessages, "public", 3, beamPublicPage);
             tftInstance->fillRect(0, listY, m.w, (int16_t)(cloudListBottom(m) - listY), CLOUD_BG);
         }
@@ -1383,6 +1399,7 @@ void KryonCloudUI::drawStorageScreen() {
         tftInstance->setTextColor(TFT_YELLOW, CLOUD_BG);
         tftInstance->setTextDatum(MC_DATUM);
         tftInstance->drawString("Fetching Manifest...", m.centerX, (int16_t)(m.centerY + 20), 2);
+        tftInstance->present();
         manifestLoaded = KryonCloudManager::fetchStorageManifest(cachedSharedFiles, cachedDeviceFiles);
         tftInstance->fillRect(0, listY, m.w, (int16_t)(cloudListBottom(m) - listY), CLOUD_BG);
     }
@@ -1462,12 +1479,14 @@ void KryonCloudUI::handleStorageTouch(uint16_t x, uint16_t y) {
         bool ok = false;
         if (backup.contains((int16_t)x, (int16_t)y)) {
             tftInstance->drawString("Backing Up Configs...", m.centerX, prog.cy(), 2);
+            tftInstance->present();
             ok = KryonCloudManager::createDeviceBackup();
             storageStatusToast = ok ? "Backup Saved to Cloud!" : "Backup Failed / No Files";
             storageStatusToastTime = millis();
             manifestLoaded = false;
         } else {
             tftInstance->drawString("Restoring Backup...", m.centerX, prog.cy(), 2);
+            tftInstance->present();
             ok = KryonCloudManager::restoreDeviceBackup();
             storageStatusToast = ok ? "Backup Restored to Disk!" : "No Backup Found / Error";
             storageStatusToastTime = millis();
@@ -1487,6 +1506,7 @@ void KryonCloudUI::handleStorageTouch(uint16_t x, uint16_t y) {
             tftInstance->setTextColor(TFT_WHITE, CLOUD_ACCENT_BLUE);
             tftInstance->setTextDatum(MC_DATUM);
             tftInstance->drawString("Downloading...", card.cx(), card.cy(), 2);
+            tftInstance->present();
 
             String localDest = "/local/cloud_" + list[idx].filename;
             KryonCloudManager::downloadCloudFile(list[idx].path, localDest, list[idx].scope);

@@ -512,6 +512,9 @@ void SettingsUI::handleSavedNetworksTouch(uint16_t x, uint16_t y) {
             tftInstance->setTextDatum(MC_DATUM);
             tftInstance->drawString("Connecting to", m.centerX, (int16_t)(m.list.y + m.list.h / 2 - 12), m.fontBody);
             tftInstance->drawString(toConnect + "...", m.centerX, (int16_t)(m.list.y + m.list.h / 2 + 13), m.fontBody);
+            // The association below blocks for up to ten seconds, and this runs inside the main loop's
+            // touch handling, so the loop cannot present this screen. See MyKeyboard::getString().
+            tftInstance->present();
 
             bool success = WiFiManager::connectTo(toConnect, pass, 10000);
             tftInstance->fillScreen(TFT_BLACK);
@@ -718,6 +721,13 @@ void SettingsUI::drawAboutLoading(int percent, const String& statusText) {
     tftInstance->setTextColor(TFT_DARKGREY, 0x10A2);
     tftInstance->drawString(String(percent) + "%", card.cx(), (int16_t)(card.y + card.h * 17 / 20),
                             m.fontBody);
+
+    // Flush, because every caller of this blocks. drawAbout() draws the 25% stage, then fetches from
+    // GitHub for seconds, then draws 60% and 90% -- and the main loop cannot present any of them,
+    // because it is sitting inside drawAbout(). Without this the only frame that ever reached the
+    // panel was the finished one, and the stages in between showed up as whatever the cache happened
+    // to evict mid-fetch. See the note in MyKeyboard::getString().
+    tftInstance->present();
 }
 
 void SettingsUI::drawAbout() {
@@ -884,10 +894,12 @@ void SettingsUI::handleAboutTouch(uint16_t x, uint16_t y) {
             tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
             tftInstance->setTextDatum(MC_DATUM);
             tftInstance->drawString("Formatting...", m.centerX, m.centerY, m.fontHeader);
+            tftInstance->present(); // the format below writes the whole flash partition
 
             FileSystem::formatLittleFS();
 
             tftInstance->drawString("Rebooting...", m.centerX, (int16_t)(m.centerY + 40), m.fontHeader);
+            tftInstance->present();
             delay(1000);
             ESP.restart();
         } else if (no.contains((int16_t)x, (int16_t)y)) {
@@ -905,6 +917,7 @@ void SettingsUI::handleAboutTouch(uint16_t x, uint16_t y) {
             tftInstance->setTextColor(TFT_YELLOW, 0x10A2);
             tftInstance->setTextDatum(TL_DATUM);
             tftInstance->drawString("Fetching...", (int16_t)(c2.x + 70), rowY, m.fontBody);
+            tftInstance->present(); // the fetch below blocks; the main loop is inside this handler
             fetchGitHubStarsLive();
             drawAbout();
         }
@@ -1145,6 +1158,7 @@ void SettingsUI::handleAppsTouch(uint16_t x, uint16_t y) {
             tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
             tftInstance->setTextDatum(MC_DATUM);
             tftInstance->drawString("Moving...", pill.cx(), pill.cy(), m.fontBody);
+            tftInstance->present(); // the copy below runs to completion before anything else can flush
 
             if (sel.isDir) {
                 if (FileSystem::copyDirectory(sel.path.c_str(), destPath.c_str())) {
@@ -1984,6 +1998,10 @@ void SettingsUI::scanAndConnectWiFi() {
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->drawString("Scanning 2.4GHz Networks...", m.centerX, (int16_t)(m.centerY - 20),
                             m.fontBody);
+    // This function blocks, so the main loop cannot flush the frame -- see the note in
+    // MyKeyboard::getString(). Without this the scanner page is drawn into a canvas nobody copies to
+    // the panel, and the screen keeps showing the WiFi menu while this runs.
+    tftInstance->present();
 
     // Initialize WiFi in Station Mode and start async scan
     WiFi.mode(WIFI_STA);
@@ -1992,6 +2010,15 @@ void SettingsUI::scanAndConnectWiFi() {
     WiFi.scanNetworks(true); // Async scan
 
     // Animated spinner while scanning
+    //
+    // Bounded, and that is the point. arduino's async scan reports WIFI_SCAN_RUNNING until its OWN
+    // timeout, which defaults to 60 SECONDS (WiFiScanClass::_scanTimeout), so a scan that never
+    // completes pins this loop -- and with it the whole UI, since this runs inside the main loop's
+    // touch handling -- for a full minute with no way out but the reset button. Give up sooner; the
+    // message after the loop distinguishes "timed out" from "found nothing".
+    constexpr uint32_t kScanBudgetMs = 15000;
+    const uint32_t scanStartedAt = millis();
+    bool scanTimedOut = false;
     int spinAngle = 0;
     int16_t scanStatus = WIFI_SCAN_RUNNING;
     const int16_t spinY = (int16_t)(m.centerY + 30);
@@ -2003,19 +2030,32 @@ void SettingsUI::scanAndConnectWiFi() {
         int px = m.centerX + (int)(cos(rad) * spinR);
         int py = spinY + (int)(sin(rad) * spinR);
         tftInstance->fillCircle(px, py, 4, TFT_CYAN);
+        tftInstance->present(); // the spinner has to reach the panel too, or it is not a spinner
         delay(40);
         tftInstance->fillCircle(px, py, 4, TFT_BLACK); // clear dot
         spinAngle = (spinAngle + 30) % 360;
         esp_task_wdt_reset();
+        if ((uint32_t)(millis() - scanStartedAt) > kScanBudgetMs) {
+            scanTimedOut = true;
+            break;
+        }
     }
 
     int n = WiFi.scanComplete();
+    // A scan that ended without a result is a timeout whichever way it ended: our own budget, or the
+    // timeout inside WiFiScanClass that setScanTimeout() caps at 15s (which reports WIFI_SCAN_FAILED,
+    // not WIFI_SCAN_RUNNING). Only a completed scan with no APs is genuinely "none found".
+    if (n < 0) scanTimedOut = true;
 
     if (n <= 0) {
         tftInstance->fillScreen(TFT_BLACK);
         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("No networks found.", m.centerX, m.centerY, m.fontBody);
+        // A scan that never finished is a different claim from an empty one: reporting "no networks
+        // found" when none were ever looked for would send the wrong fix.
+        tftInstance->drawString(scanTimedOut ? "Scan timed out." : "No networks found.",
+                                m.centerX, m.centerY, m.fontBody);
+        tftInstance->present();
         delay(1500);
         drawWiFi();
         return;
@@ -2099,6 +2139,9 @@ void SettingsUI::scanAndConnectWiFi() {
             tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
             tftInstance->drawString("Next Page", next.cx(), next.cy(), m.fontBody);
         }
+        // The page is complete; put it on the panel before waiting for a tap, or the wait is for a
+        // tap on something the user cannot see.
+        tftInstance->present();
 
         // Touch handling loop
         uint16_t tx = 0, ty = 0;
@@ -2163,6 +2206,7 @@ void SettingsUI::scanAndConnectWiFi() {
             tftInstance->drawString("Connecting to", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
             tftInstance->drawString(selectedSSID + "...", m.centerX, (int16_t)(m.centerY + 5),
                                     m.fontBody);
+            tftInstance->present();
 
             bool success = WiFiManager::connectTo(selectedSSID, password, 10000);
 
@@ -2170,6 +2214,7 @@ void SettingsUI::scanAndConnectWiFi() {
             tftInstance->setTextColor(success ? TFT_GREEN : TFT_RED, TFT_BLACK);
             tftInstance->drawString(success ? "Connected Successfully!" : "Connection Failed!",
                                     m.centerX, m.centerY, m.fontBody);
+            tftInstance->present();
             delay(1200);
 
             drawWiFi();
@@ -2317,6 +2362,10 @@ void SettingsUI::drawOTAProgress(int percent, size_t currentBytes, size_t totalB
     tftInstance->setTextColor(TFT_DARKGREY, TFT_BLACK);
     tftInstance->drawString("Anti-rollback protection active", m.centerX,
                             (int16_t)(m.centerY + 105), m.fontSmall);
+
+    // Flush each step: the download and flash call this from inside their own loop, so the main loop
+    // never gets a turn until the update is over. See the note in MyKeyboard::getString().
+    tftInstance->present();
 }
 
 void SettingsUI::drawOTAError(const String& errorMsg) {
@@ -2413,6 +2462,7 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->drawString("Checking for updates...", m.centerX, m.centerY, m.fontBody);
+    tftInstance->present(); // the version check below blocks on the network
 
     bool hasUpdate = OTAManager::checkUpdate(isBootCheck);
     const OTAUpdateInfo& info = OTAManager::getUpdateInfo();

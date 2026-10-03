@@ -1536,6 +1536,13 @@ duk_ret_t JSBindings::js_micros(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_delay(duk_context *ctx) {
     int ms = duk_require_int(ctx, 0);
+    // Flush the frame before waiting. System.delay() is an app's frame boundary, and for the whole
+    // time an app is running the main loop is blocked inside LauncherUI::runApp() -- so the loop's
+    // per-iteration present() never runs. On a backend whose canvas IS the panel's frame buffer that
+    // leaves the app's drawing in the CPU's write-back cache while the DMA scans a partly-stale
+    // frame, which is what the banded app pages were. See "WHY present() IS NOT EMPTY" in
+    // KorvoRgbDisplay.h. A no-op on the write-through TFT_eSPI backends.
+    if (tftInstance) tftInstance->present();
     if (ms > 0 && ms < 30000) { // Safety cap at 30 seconds
         delay(ms);
     }
@@ -1771,6 +1778,7 @@ void JSBindings::showWiFiAlertModal() {
     tftInstance->fillRoundRect(70, 195, 100, 36, 6, TFT_BLUE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
     tftInstance->drawString("OK", 120, 213, 2);
+    tftInstance->present(); // see promptStoragePermission(): the modal blocks, so it flushes itself
     
     unsigned long startModal = millis();
     uint16_t tx = 0, ty = 0;
@@ -2509,6 +2517,9 @@ static bool promptStoragePermission(const String& pkg, const String& targetPath)
     tft->fillRoundRect(20, 205, 200, 32, 4, TFT_RED);
     tft->setTextColor(TFT_WHITE, TFT_RED);
     tft->drawString("Deny", 120, 221, 2);
+    // Flush before waiting: this modal blocks, so the main loop's per-iteration present() cannot run
+    // and the three buttons would never reach a canvas backend (the S31, the Waveshare).
+    tft->present();
 
     // Wait for touch with watchdog reset
     uint16_t tx = 0, ty = 0;

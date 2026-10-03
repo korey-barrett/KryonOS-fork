@@ -358,7 +358,8 @@ bool HelpCenterUI::downloadFile(const String& url, const String& destPath, const
     tftInstance->drawString(loadingMsg, m.centerX, m.centerY - 20, m.fontBody);
     const UiRect bar = { (int16_t)(m.centerX - (m.w - 60) / 2), m.centerY, (int16_t)(m.w - 60), 20 };
     tftInstance->drawRect(bar.x, bar.y, bar.w, bar.h, TFT_WHITE);
-    
+    tftInstance->present(); // the GET below blocks; this is the help centre's only loading draw
+
     int httpCode = http.GET();
     if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
         int totalLen = http.getSize();
@@ -394,6 +395,7 @@ bool HelpCenterUI::downloadFile(const String& url, const String& destPath, const
                     if (totalLen > 0) {
                         int progressWidth = map(downloaded, 0, totalLen, 0, bar.w - 4);
                         tftInstance->fillRect(bar.x + 2, bar.y + 2, progressWidth, bar.h - 4, TFT_GREEN);
+                        tftInstance->present(); // or the bar never moves -- nothing else runs during the transfer
                     }
                 }
             } else {

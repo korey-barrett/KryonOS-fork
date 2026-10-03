@@ -97,7 +97,11 @@ static void my_fatal(void *udata, const char *msg) {
         HarixKernel::tftInstance->fillRoundRect(200, 0, 40, 30, 5, TFT_WHITE);
         HarixKernel::tftInstance->setTextColor(TFT_RED, TFT_WHITE);
         HarixKernel::tftInstance->drawString("X", 215, 8, 2);
-        
+        // The X is the only way off this screen, and this runs inside the main loop that would
+        // otherwise flush the frame -- so flush it here. On a canvas backend the button is otherwise
+        // invisible, which makes a recoverable error look like a dead board.
+        HarixKernel::tftInstance->present();
+
         // Wait for user to touch the X before rebooting!
         uint16_t tx, ty;
         while(true) {
@@ -189,7 +193,8 @@ void HarixKernel::checkJSError(duk_context *ctx, duk_int_t result) {
                 tftInstance->fillRoundRect(200, 0, 40, 30, 5, TFT_WHITE);
                 tftInstance->setTextColor(TFT_RED, TFT_WHITE);
                 tftInstance->drawString("X", 215, 8, 2);
-                
+                tftInstance->present(); // see my_fatal(): the X must be on the panel before we wait
+
                 uint16_t tx, ty;
                 while(true) {
                     if (TouchDriver::getTouch(&tx, &ty)) {
@@ -257,7 +262,8 @@ void HarixKernel::checkJSError(duk_context *ctx, duk_int_t result) {
             tftInstance->fillRoundRect(200, 0, 40, 30, 5, TFT_WHITE);
             tftInstance->setTextColor(TFT_RED, TFT_WHITE);
             tftInstance->drawString("X", 215, 8, 2);
-            
+            tftInstance->present(); // see my_fatal(): the X must be on the panel before we wait
+
             uint16_t tx, ty;
             while(true) {
                 if (TouchDriver::getTouch(&tx, &ty)) {
@@ -391,7 +397,8 @@ void HarixKernel::runFile(const char* filePath) {
             tftInstance->fillRoundRect(200, 0, 40, 30, 5, TFT_WHITE);
             tftInstance->setTextColor(TFT_RED, TFT_WHITE);
             tftInstance->drawString("X", 215, 8, 2);
-            
+            tftInstance->present(); // see my_fatal(): the X must be on the panel before we wait
+
             uint16_t tx, ty;
             while(true) {
                 if (TouchDriver::getTouch(&tx, &ty)) {

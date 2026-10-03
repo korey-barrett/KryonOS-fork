@@ -144,7 +144,8 @@ bool AppStoreUI::downloadFile(const String& url, const String& destPath, const S
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->drawString(loadingMsg, m.centerX, (int16_t)(m.progressBar.y - 20), m.fontBody);
     tftInstance->drawRect(m.progressBar.x, m.progressBar.y, m.progressBar.w, m.progressBar.h, TFT_WHITE);
-    
+    tftInstance->present(); // the GET below blocks; this is the store's only loading draw
+
     int httpCode = http.GET();
     if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
         int totalLen = http.getSize();
@@ -192,6 +193,7 @@ bool AppStoreUI::downloadFile(const String& url, const String& destPath, const S
                     if (totalLen > 0) {
                         int progressWidth = map(downloaded, 0, totalLen, 0, 176);
                         tftInstance->fillRect(32, 162, progressWidth, 16, TFT_GREEN);
+                        tftInstance->present(); // or the bar never moves -- nothing else runs during the transfer
                     }
                 }
             } else {

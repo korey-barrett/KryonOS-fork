@@ -193,6 +193,9 @@ void InstallerUI::scanSD() {
             tftInstance->setTextDatum(MC_DATUM);
             tftInstance->drawString("Loading App Details...", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
             tftInstance->drawRect(barX, m.centerY, barW, 20, TFT_WHITE);
+            // The directory walk below reads every app.json, which on SD is slow enough to see; the
+            // main loop is sitting inside this call. See MyKeyboard::getString().
+            tftInstance->present();
         }
 
         // Check each directory for app.json
@@ -691,6 +694,11 @@ static void installProgressCallback(int current, int total) {
     // Draw file count
     progressTft->fillRect((int16_t)(m.centerX - 60), (int16_t)(m.centerY + 50), 120, 20, TFT_DARKGREY);
     progressTft->drawString(String(current) + " / " + String(total) + " files", m.centerX, (int16_t)(m.centerY + 60), m.fontBody);
+
+    // Flush each step. performInstall() copies and flashes between callbacks and does not return to
+    // the main loop until the install is over, so nothing else presents this screen -- without this
+    // the bar sat still and then the finished screen appeared all at once. See MyKeyboard::getString().
+    progressTft->present();
 }
 
 void InstallerUI::drawInstallProgress(int current, int total) {

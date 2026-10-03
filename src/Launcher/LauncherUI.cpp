@@ -69,6 +69,10 @@ void LauncherUI::scanLocalApps() {
                 const UiMetrics& m = M();
                 const int16_t barW = (int16_t)(m.w - 40);
                 tftInstance->fillRect(20, m.centerY + 40, (i * barW) / count, 10, TFT_GREEN);
+                // Flush per entry: this scan reads every app.json and nothing else runs until it
+                // finishes, so without this the bar the caller drew never advances. See the note in
+                // MyKeyboard::getString().
+                tftInstance->present();
             }
             
             // 1. Check if it's an app package (has app.json)

@@ -67,8 +67,15 @@ String MyKeyboard::getString(String initialText, String promptMsg, int maxLen) {
     int page = 0;     // row pager: which page of ROWS the grid is showing (always 0 when they all fit)
     int charPage = 0; // character set: letters+digits, or symbols (always 0 on a single-page board)
 
-    // Draw initial state
+    // Draw initial state.
+    //
+    // present() is not optional here. This function blocks, and the thing that normally flushes a
+    // frame is the main loop -- the same loop that is now sitting inside this call. On a
+    // write-through backend present() is a no-op and the draws above are already on the panel; on a
+    // canvas backend it is the only thing that copies the canvas to the panel, so without it the
+    // keyboard is invisible and the whole screen looks frozen.
     drawKeyboard(currentText, promptMsg, caps, -1, -1, page, charPage);
+    tftInstance->present();
 
     while (!done) {
         uint16_t x, y;
@@ -76,8 +83,26 @@ String MyKeyboard::getString(String initialText, String promptMsg, int maxLen) {
             handleTouch(x, y, currentText, caps, done, page, charPage);
             if (!done) {
                 drawKeyboard(currentText, promptMsg, caps, -1, -1, page, charPage);
+                tftInstance->present();
             }
-            delay(200); // Debounce
+
+            // Wait for the finger to lift before accepting another key.
+            //
+            // A fixed debounce delay is not enough here, and this is the difference between a tap
+            // typing one character and typing two. The main loop is edge-triggered -- it acts on a
+            // press only at the rising edge (see the wasTouched flag in main.cpp) -- but this
+            // function reads the panel directly, and on an absolute-position controller a contact
+            // reads as down for as long as it lasts. On the S31 the gap between one read and the
+            // next is not the 200ms delay but that delay plus the canvas blit inside present()
+            // (768KB over the RGB bus), which together outlast an ordinary tap: the tail of the
+            // press is then read as a second press and types the character again. Requiring the
+            // release is what actually makes one tap one key, on every backend and at any frame
+            // cost. Bounded so a panel stuck reporting contact cannot wedge the keyboard.
+            const uint32_t pressStartedAt = millis();
+            uint16_t rx, ry;
+            while (TouchDriver::getTouch(&rx, &ry) && (uint32_t)(millis() - pressStartedAt) < 1000) {
+                delay(20);
+            }
         }
         delay(10);
     }

@@ -84,11 +84,18 @@ void setup() {
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(MC_DATUM);
     tft.drawString("Booting KryonOS...", Display::centerX(), Display::centerY(), M().fontBody);
+    // Every message below is drawn and then waited on -- a file system mount, a WiFi association, the
+    // app scan -- and each of those blocks. The main loop, which is the only other caller of
+    // present(), has not started yet, so anything not flushed here is overwritten in the cache before
+    // it ever reaches the panel. That is why the boot text looked absent on this board when it was
+    // there all along. See the note in MyKeyboard::getString().
+    tft.present();
 
     // Initialize File Systems (LittleFS & SD)
     if (!FileSystem::init()) {
         Serial.println("File System Warning: One or more FS failed to mount.");
         tft.drawString("FS Mount Warning!", Display::centerX(), Display::centerY() + 20, M().fontBody);
+        tft.present();
         delay(1000);
     }
     
@@ -99,10 +106,12 @@ void setup() {
     if (!FileSystem::exists("/local/nowifi.txt")) {
         tft.fillScreen(TFT_BLACK);
         tft.drawString("Connecting WiFi...", Display::centerX(), Display::centerY(), M().fontBody);
+        tft.present();
         Serial.println("DEBUG: Starting WebManager...");
         if (WebManager::init()) {
             tft.drawString("WiFi Connected!", Display::centerX(), Display::centerY() - 20, M().fontBody);
             tft.drawString(WebManager::getIPAddress(), Display::centerX(), Display::centerY() + 20, M().fontBody);
+            tft.present();
             delay(2000);
         }
         Serial.println("DEBUG: WebManager initialized.");
@@ -136,6 +145,7 @@ void setup() {
     tft.drawString("Loading Apps...", Display::centerX(), Display::centerY(), M().fontBody);
     // Loading bar outline: 18px side gutters, 38px below centre (18,198,204,14 at 240x320).
     tft.drawRect(18, Display::centerY() + 38, Display::width() - 36, 14, TFT_WHITE);
+    tft.present();
     LauncherUI::scanLocalApps();
     LauncherUI::needsRescan = false;
     Serial.println("DEBUG: Local Apps Scanned.");
@@ -364,8 +374,9 @@ void loop() {
     // Floating Notification compositor overlay
     NotificationManager::updateAndRender(&tft);
 
-    // Flush any pending frame. No-op on the TFT_eSPI backend, which writes straight to the panel;
-    // on the RGB backend this is what copies the PSRAM canvas to the panel.
+    // Flush any pending frame. A no-op on the TFT_eSPI backend, which writes straight to the panel;
+    // on the RGB backend the panel's DMA reads the frame buffer out of physical PSRAM, so this is
+    // what writes the CPU's cached drawing back to it.
     tft.present();
 
     // Yield to let ESP32 handle background tasks
