@@ -9,10 +9,23 @@ RamFramebufferDisplay::RamFramebufferDisplay(int16_t nativeWidth, int16_t native
     : nativeW_(nativeWidth), nativeH_(nativeHeight), w_(nativeWidth), h_(nativeHeight) {}
 
 RamFramebufferDisplay::~RamFramebufferDisplay() {
-    if (buffer_) {
+    // Only free what this class allocated. A buffer handed in by attachBuffer() belongs to the
+    // caller -- on the Korvo-1 that buffer is the RGB panel's own frame buffer, and freeing it here
+    // would hand the panel a dangling scanout.
+    if (ownsBuffer_ && buffer_) {
         free(buffer_);
-        buffer_ = nullptr;
     }
+    buffer_ = nullptr;
+}
+
+void RamFramebufferDisplay::attachBuffer(uint16_t* buffer) {
+    // Draw into a caller-owned buffer of nativeW_ * nativeH_ pixels instead of allocating one. The
+    // caller keeps ownership and is responsible for its lifetime outliving this object.
+    if (ownsBuffer_ && buffer_) {
+        free(buffer_);
+    }
+    buffer_ = buffer;
+    ownsBuffer_ = false;
 }
 
 // --- Lifecycle ----------------------------------------------------------------------------------

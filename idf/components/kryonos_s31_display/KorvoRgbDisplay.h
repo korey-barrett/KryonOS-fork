@@ -12,22 +12,54 @@
  *   file has no register map, no init table, no expander and no pin list. That is the whole point of
  *   using the BSP.
  *
- * HOW IT DRAWS
+ * DRAWING GOES STRAIGHT TO THE PANEL
  *   The BSP gives a panel handle and a blit, not a rasterizer: LVGL is not something you can call
  *   per-primitive. So drawing goes to a KryonSprite -- the component's TFT_eSprite replacement, which
- *   is a RAM framebuffer plus the ported TFT_eSPI text engine -- and present() copies the finished
- *   frame into the panel's own frame buffer and hands that buffer back to the driver.
+ *   is a RAM framebuffer plus the ported TFT_eSPI text engine -- and that sprite is attached to the
+ *   panel's OWN frame buffer. Every primitive therefore lands in the memory the scanout reads. This is
+ *   the same shape as TftEspiDisplay, whose present() is likewise thin because TFT_eSPI writes through
+ *   to the glass.
+ *
+ * WHY THE PANEL IS NOT IN BOUNCE BUFFER MODE
+ *   The displaced picture this board used to show -- the top of the page reappearing at the bottom, by
+ *   an amount that changed between boots -- was the RGB driver's bounce buffer losing its place.
+ *
+ *   In bounce mode the driver streams the frame buffer to the panel through two small internal
+ *   buffers, and tracks how far through the frame it has got in a SOFTWARE counter (bounce_pos_px,
+ *   esp_lcd_panel_rgb.c) that only advances when its refill interrupt manages to copy the next slice
+ *   out of PSRAM before the DMA has finished sending the previous one. Miss that deadline once -- and
+ *   a flash write, a WiFi burst or any cache-off window is enough -- and every later slice is offset
+ *   by a whole bounce buffer. PERMANENTLY, because nothing on this chip corrects it: the desync
+ *   recovery path (lcd_rgb_panel_try_restart_transmission, and the public esp_lcd_rgb_panel_restart)
+ *   is guarded by RGB_LCD_NEEDS_SEPARATE_RESTART_LINK, which that file defines ONLY under
+ *   CONFIG_IDF_TARGET_ESP32S3, so on the S31 it is not compiled and the public call returns
+ *   ESP_ERR_NOT_SUPPORTED. The "LCD underrun" it would have logged on a missed refill is missing too,
+ *   because LCD_LL_EVENT_UNDERRUN is not defined for this SoC and the check compiles out. Silent and
+ *   permanent is exactly what was observed, including the amount varying from boot to boot.
+ *
+ *   So the counter is gone: with no bounce buffer the DMA link is built with
+ *   mark_final = GDMA_FINAL_LINK_TO_DEFAULT (esp_lcd_panel_rgb.c:1225), which restarts the transfer
+ *   at row 0 of the frame buffer at the end of EVERY frame. The scanout position now lives in the DMA
+ *   hardware and is re-established 35 times a second, so a stall can corrupt a frame but can never
+ *   accumulate into a displacement. See CONFIG_BSP_LCD_RGB_REFRESH_AUTO in sdkconfig.defaults.
+ *
+ *   The cost is that a redraw is visible as it happens, because the panel is reading the same memory
+ *   being written. That is the trade the whole design makes: the other KryonOS boards hide it behind
+ *   the panel's own GRAM, and this panel has none.
+ *
+ * WHY present() IS NOT EMPTY
+ *   Because the scanout no longer passes through the CPU. The panel's DMA reads the frame buffer out
+ *   of PHYSICAL PSRAM, while KryonOS's draws land in the write-back cache in front of it. Until those
+ *   dirty lines are written back, the DMA is reading a stale picture -- so present() flushes them.
+ *
+ *   This is the same esp_cache_msync the RGB driver makes for itself when a draw buffer is found to
+ *   belong to the frame buffer (esp_lcd_panel_rgb.c:767). KryonOS never calls
+ *   esp_lcd_panel_draw_bitmap, because the canvas IS the frame buffer, so it makes the call itself.
+ *   Bounce mode hid this by accident: its refill interrupt read the frame buffer through the CPU, so
+ *   it saw cached writes for free.
  *
  *   The canvas is exactly the panel: 800x480, and panelToCanvas() is identity. The Waveshare's round
  *   aperture and 6/5 upscale have no counterpart here because this panel is a plain rectangle.
- *
- * NO DOUBLE-BUFFER HANDSHAKE
- *   The Waveshare backend needed an ISR callback, a swap-pending flag and a stall watchdog, because
- *   that driver anchors the scanout to framebuffer 0 on every VSYNC (an ESP32-S3-only restart-link
- *   workaround). The S31's RGB driver does not: it takes the frame buffer you hand it, sets
- *   cur_fb_index, and -- in bounce-buffer mode -- lets bb_fb_index re-latch at the next frame wrap.
- *   So present() alternates the two buffers and the flip is a frame boundary late, tear-free, with no
- *   callback and no watchdog to get wrong.
  *
  * WHAT IT DOES NOT DO
  *   setRotation() other than 0. The RGB scanout's orientation is fixed by the panel's wiring; a
@@ -40,6 +72,8 @@
  */
 
 #include <TFT_eSPI.h> // the component's shim, not the real library -- see that header
+
+#include <stddef.h>
 
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_rgb.h>
@@ -111,7 +145,8 @@ public:
     TFT_eSPI* nativeTft() override { return &native_; }
 
     // --- Frame presentation ---
-    /** Copies the canvas into the frame buffer the scanout is not reading, then flips to it. */
+    /** Writes the CPU's cached drawing out to the frame buffer the DMA scans. See "WHY present() IS
+     *  NOT EMPTY" above. */
     void present() override;
 
     /** True once the panel exists and the canvas allocation succeeded. */
@@ -124,15 +159,19 @@ public:
     const char* lastError() const { return lastError_; }
 
 private:
+    /** The cache flush present() performs, also used once during bring-up. See its definition. */
+    void flushToPanel();
+
     // The shim, declared first so it is constructed before the sprite that points at it.
     TFT_eSPI native_;
     TFT_eSprite canvas_{&native_};
 
     esp_lcd_panel_handle_t panel_ = nullptr;
-
-    // The panel's two frame buffers, fetched once at bring-up. present() alternates between them; the
-    // driver recognises a pointer that is one of its own and adopts it without copying.
-    void* fb_[2] = {nullptr, nullptr};
+    // The panel's frame buffer, which the canvas is attached to, and its size in bytes for the flush
+    // in present(). Held separately from the canvas so present() does not have to go through the
+    // sprite to find out what to write back.
+    void* fb_ = nullptr;
+    size_t fbSize_ = 0;
 
     int16_t nativeW_ = 0;
     int16_t nativeH_ = 0;
@@ -141,12 +180,8 @@ private:
     uint8_t rotation_ = 0;
 
     bool canvasReady_ = false;
-    bool dirty_ = false;
     bool rotationWarned_ = false;
     bool backlightWarned_ = false;
-    // Index of the frame buffer present() writes into next. Starts at 1 because the driver brings the
-    // scanout up on framebuffer 0, so the first present has to use the other one.
-    uint8_t nextFb_ = 1;
     const char* lastError_ = "";
 };
 

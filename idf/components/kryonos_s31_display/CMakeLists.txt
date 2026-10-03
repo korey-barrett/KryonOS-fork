@@ -32,5 +32,9 @@ idf_component_register(
         arduino-esp32
         esp_psram
         esp_lcd
+        # For esp_cache_msync, which present() calls to write the CPU's cached drawing back to the
+        # PSRAM the RGB panel's DMA scans. Needed explicitly: esp_lcd and esp_psram both list esp_mm
+        # as a PRIV_REQUIRES, and private requires do not propagate their include directories here.
+        esp_mm
         espressif__esp32_s31_korvo_1
 )

@@ -44,6 +44,11 @@ public:
     // --- Lifecycle (TFT_eSprite's names) ---------------------------------------------------------
     /** Allocates the buffer. Returns it, or nullptr if the allocation failed. */
     void* createSprite(int16_t w, int16_t h);
+    /**
+     * Draws into a caller-owned w*h RGB565 buffer instead of allocating one, and does not own it.
+     * Used by the Korvo-1 backend to rasterize straight into the RGB panel's frame buffer.
+     */
+    void* attachBuffer(uint16_t* buffer, int16_t w, int16_t h);
     void deleteSprite();
     /** Accepted and recorded; the buffer stays 16bpp -- see COLOUR DEPTH above. */
     void setColorDepth(int8_t bits);

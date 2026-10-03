@@ -1,15 +1,17 @@
 // The ESP32-S31-Korvo-1 display backend. See KorvoRgbDisplay.h for why it is this short: Espressif's
-// BSP owns the panel, the bus, the timings and the frame buffers, and this file owns only the two
-// things a BSP cannot give -- a rasterizer call surface, and a way to put a finished frame on screen.
+// BSP owns the panel, the bus, the timings and the frame buffers, and this file owns only the one
+// thing a BSP cannot give -- a rasterizer call surface. Drawing goes straight into the panel's own
+// frame buffer, so present() has no frame to hand over; what it does have to do is write the CPU's
+// cached drawing back out to the PSRAM the DMA scans.
 
 #include "KorvoRgbDisplay.h"
 
 #include <Arduino.h>
 
 #include <stdio.h>
-#include <string.h>
 
 #include <esp_err.h>
+#include <esp_cache.h>
 
 #include "bsp/display.h"
 
@@ -47,39 +49,34 @@ void KorvoRgbDisplay::init(uint8_t tc) {
     }
     panel_ = handles.panel;
 
-    // BOTH of the BSP's frame buffers, by pointer. Presenting is then picking one of these rather
-    // than handing the driver a staging buffer to copy into -- rgb_panel_draw_bitmap recognises an
-    // address inside its own frame buffer, adopts it and copies nothing.
-    err = esp_lcd_rgb_panel_get_frame_buffer(panel_, 2, &fb_[0], &fb_[1]);
-    if (err != ESP_OK || !fb_[0] || !fb_[1]) {
-        lastError_ = "the panel does not expose two frame buffers (is BSP_LCD_RGB_BUFFER_NUMS 2?)";
-        Serial.printf("[Display:korvo] FAILED at frame buffers: %s -- drawing disabled.\n",
+    // The panel's own frame buffer, and the canvas IS that buffer -- see "DRAWING GOES STRAIGHT TO
+    // THE PANEL" in the header. There is no second copy: the driver allocated exactly one
+    // (BSP_LCD_RGB_BUFFER_NUMS=1) and it is the memory the scanout reads.
+    err = esp_lcd_rgb_panel_get_frame_buffer(panel_, 1, &fb_);
+    if (err != ESP_OK || !fb_) {
+        lastError_ = "the panel did not expose a frame buffer";
+        Serial.printf("[Display:korvo] FAILED at frame buffer: %s -- drawing disabled.\n",
                       lastError_);
         panel_ = nullptr;
         return;
     }
+    fbSize_ = static_cast<size_t>(nativeW_) * static_cast<size_t>(nativeH_) * 2;
 
     canvas_.setColorDepth(16);
-    if (!canvas_.createSprite(nativeW_, nativeH_)) {
-        lastError_ = "16bpp canvas allocation failed";
+    if (!canvas_.attachBuffer(static_cast<uint16_t*>(fb_), nativeW_, nativeH_)) {
+        lastError_ = "the canvas could not be attached to the panel frame buffer";
         Serial.printf("[Display:korvo] FAILED at canvas: %s -- drawing disabled.\n", lastError_);
         panel_ = nullptr;
         return;
     }
     canvasReady_ = true;
 
-    // Black, and black in both frame buffers, before the display is switched on. The driver's
-    // scanout is already running against freshly allocated PSRAM at this point, so filling only the
-    // canvas would leave the other buffer full of noise to appear on the first flip. The display is
-    // still off (the BSP leaves the DISP GPIO inactive), so none of this is visible.
+    // Black before the first real frame. The driver zeroed the frame buffer with calloc and flushed
+    // it, so this is belt-and-braces rather than the only thing standing between the panel and
+    // uninitialised PSRAM -- but it is also the first exercise of the flush in present(), so it is
+    // worth doing here rather than assuming the path works later.
     canvas_.fillScreen(0x0000);
-    const size_t fbBytes = static_cast<size_t>(nativeW_) * static_cast<size_t>(nativeH_) *
-                           sizeof(uint16_t);
-    for (size_t i = 0; i < 2; i++) {
-        memcpy(fb_[i], canvas_.pixels(), fbBytes);
-    }
-    // The scanout came up on buffer 0, so the first present must write the other one -- see nextFb_.
-    nextFb_ = 1;
+    flushToPanel();
 
     err = esp_lcd_panel_disp_on_off(panel_, true);
     if (err != ESP_OK) {
@@ -91,7 +88,7 @@ void KorvoRgbDisplay::init(uint8_t tc) {
     // bring-up sequence identical to every other backend, and the result is logged rather than
     // checked -- a "failure" here would be a false alarm.
     const esp_err_t blErr = bsp_display_backlight_on();
-    Serial.printf("[Display:korvo] ready: canvas %dx%d, 2 frame buffers, backlight %s (%s)\n",
+    Serial.printf("[Display:korvo] ready: canvas is the panel frame buffer, %dx%d, backlight %s (%s)\n",
                   static_cast<int>(w_), static_cast<int>(h_),
                   blErr == ESP_OK ? "on" : "always-on (no control)",
                   esp_err_to_name(blErr));
@@ -135,30 +132,20 @@ void KorvoRgbDisplay::setBacklight(uint8_t brightness) {
 // Frame presentation
 // =================================================================================================
 
-void KorvoRgbDisplay::present() {
-    if (!panel_ || !canvasReady_ || !fb_[0] || !dirty_) return;
+void KorvoRgbDisplay::present() { flushToPanel(); }
 
-    uint16_t* dst = static_cast<uint16_t*>(fb_[nextFb_]);
-    const uint16_t* src = canvas_.pixels();
-    if (!dst || !src) return;
-
-    const size_t fbBytes = static_cast<size_t>(nativeW_) * static_cast<size_t>(nativeH_) *
-                           sizeof(uint16_t);
-    memcpy(dst, src, fbBytes);
-
-    // Handing the driver a pointer that IS one of its own frame buffers is what makes it adopt this
-    // one: rgb_panel_draw_bitmap finds the address inside fbs[], sets cur_fb_index and copies
-    // nothing. In bounce-buffer mode -- which is how this board is configured -- the scanout keeps
-    // reading the previous buffer until bb_fb_index re-latches at the frame wrap, so the switch
-    // lands on a boundary rather than mid-frame. That is the entire anti-tearing story here; the
-    // Waveshare's ISR handshake is not needed because this driver does not anchor the scanout.
+void KorvoRgbDisplay::flushToPanel() {
+    // Write the CPU's cached drawing back to physical PSRAM, because the scanout does not go through
+    // the CPU any more: the RGB panel's DMA reads the frame buffer straight out of PSRAM while every
+    // draw KryonOS made is sitting in the write-back cache in front of it. Without this the DMA is
+    // reading a stale picture. See "WHY present() IS NOT EMPTY" in the header.
     //
-    // No cache maintenance on our side: with a bounce buffer the driver reads the frame buffer with
-    // the CPU (coherent by construction), and its own write-back is what feeds the DMA.
-    esp_lcd_panel_draw_bitmap(panel_, 0, 0, w_, h_, fb_[nextFb_]);
-    nextFb_ = static_cast<uint8_t>(nextFb_ ^ 1u);
-
-    dirty_ = false;
+    // Unconditional, and cheap enough to be so. esp_cache_msync walks the range a cache line at a
+    // time, but the write-back itself is driven by the dirty bits, so the ~6000 lines of a mostly
+    // clean 800x480x2 buffer cost the walk and no bus traffic. Threading a dirty rectangle through
+    // every primitive would save that walk and not the flush, which is not worth it.
+    if (!fb_ || fbSize_ == 0) return;
+    esp_cache_msync(fb_, fbSize_, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
 }
 
 // =================================================================================================
@@ -172,93 +159,65 @@ void KorvoRgbDisplay::present() {
 
 void KorvoRgbDisplay::fillScreen(uint32_t color) {
     if (!canvasReady_) return;
-    canvas_.fillScreen(static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.fillScreen(static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::fillRect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color) {
     if (!canvasReady_ || w <= 0 || h <= 0) return;
-    canvas_.fillRect(x, y, w, h, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.fillRect(x, y, w, h, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::drawRect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color) {
     if (!canvasReady_ || w <= 0 || h <= 0) return;
-    canvas_.drawRect(x, y, w, h, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.drawRect(x, y, w, h, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::drawRoundRect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t radius,
                                     uint32_t color) {
     if (!canvasReady_ || w <= 0 || h <= 0) return;
-    canvas_.drawRoundRect(x, y, w, h, radius, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.drawRoundRect(x, y, w, h, radius, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::fillRoundRect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t radius,
                                     uint32_t color) {
     if (!canvasReady_ || w <= 0 || h <= 0) return;
-    canvas_.fillRoundRect(x, y, w, h, radius, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.fillRoundRect(x, y, w, h, radius, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::drawLine(int32_t xs, int32_t ys, int32_t xe, int32_t ye, uint32_t color) {
     if (!canvasReady_) return;
-    canvas_.drawLine(xs, ys, xe, ye, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.drawLine(xs, ys, xe, ye, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::drawFastVLine(int32_t x, int32_t y, int32_t h, uint32_t color) {
     if (!canvasReady_ || h <= 0) return;
-    canvas_.drawFastVLine(x, y, h, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.drawFastVLine(x, y, h, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::drawFastHLine(int32_t x, int32_t y, int32_t w, uint32_t color) {
     if (!canvasReady_ || w <= 0) return;
-    canvas_.drawFastHLine(x, y, w, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.drawFastHLine(x, y, w, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::drawPixel(int32_t x, int32_t y, uint32_t color) {
     if (!canvasReady_) return;
-    canvas_.drawPixel(x, y, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.drawPixel(x, y, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::drawCircle(int32_t x, int32_t y, int32_t r, uint32_t color) {
     if (!canvasReady_) return;
-    canvas_.drawCircle(x, y, r, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.drawCircle(x, y, r, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::fillCircle(int32_t x, int32_t y, int32_t r, uint32_t color) {
     if (!canvasReady_) return;
-    canvas_.fillCircle(x, y, r, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.fillCircle(x, y, r, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::drawTriangle(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t x3,
                                    int32_t y3, uint32_t color) {
     if (!canvasReady_) return;
-    canvas_.drawTriangle(x1, y1, x2, y2, x3, y3, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.drawTriangle(x1, y1, x2, y2, x3, y3, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::fillTriangle(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t x3,
                                    int32_t y3, uint32_t color) {
     if (!canvasReady_) return;
-    canvas_.fillTriangle(x1, y1, x2, y2, x3, y3, static_cast<uint16_t>(color));
-    dirty_ = true;
-}
+    canvas_.fillTriangle(x1, y1, x2, y2, x3, y3, static_cast<uint16_t>(color));}
 
 void KorvoRgbDisplay::pushImage(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t* data) {
     if (!canvasReady_ || !data || w <= 0 || h <= 0) return;
     // The canvas, the sprite buffers it is handed and the panel frame buffer all hold native
     // little-endian RGB565, so this is a straight copy with no byte swap anywhere in the pipeline.
-    canvas_.pushImage(x, y, w, h, data);
-    dirty_ = true;
-}
+    canvas_.pushImage(x, y, w, h, data);}
 
 // =================================================================================================
 // Text -- the canvas owns the ported TFT_eSPI font engine, so glyphs and metrics here are the same
@@ -276,15 +235,11 @@ void KorvoRgbDisplay::setTextSize(uint8_t size) { canvas_.setTextSize(size); }
 
 void KorvoRgbDisplay::drawString(const char* string, int32_t x, int32_t y) {
     if (!canvasReady_ || !string) return;
-    canvas_.drawString(string, x, y);
-    dirty_ = true;
-}
+    canvas_.drawString(string, x, y);}
 
 void KorvoRgbDisplay::drawString(const char* string, int32_t x, int32_t y, uint8_t font) {
     if (!canvasReady_ || !string) return;
-    canvas_.drawString(string, x, y, font);
-    dirty_ = true;
-}
+    canvas_.drawString(string, x, y, font);}
 
 void KorvoRgbDisplay::drawString(const String& string, int32_t x, int32_t y) {
     drawString(string.c_str(), x, y);

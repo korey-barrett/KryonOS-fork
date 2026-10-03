@@ -85,6 +85,17 @@ public:
     /** Row-major RGB565 frame, width() * height() entries, or nullptr when not ready. */
     const uint16_t* pixels() const { return buffer_; }
 
+    /**
+     * Draw into a caller-owned buffer of nativeW_ * nativeH_ RGB565 pixels instead of allocating
+     * one, and stop owning the storage. Call before init(), which then finds the buffer already
+     * present and does nothing.
+     *
+     * This exists so a backend whose panel already owns a frame buffer can rasterize straight into
+     * it rather than keeping a second full-size copy of the frame in RAM and memcpy'ing between
+     * them. Nothing on the existing RAM backend calls it, so its behaviour is unchanged.
+     */
+    void attachBuffer(uint16_t* buffer);
+
 private:
     void putPixel(int32_t x, int32_t y, uint16_t color);
     void hLine(int32_t x, int32_t y, int32_t w, uint16_t color);
@@ -94,6 +105,7 @@ private:
     static int16_t glyphAdvance(uint8_t font);
 
     uint16_t* buffer_ = nullptr;
+    bool ownsBuffer_ = true;
     int16_t nativeW_ = 0;
     int16_t nativeH_ = 0;
     int16_t w_ = 0;

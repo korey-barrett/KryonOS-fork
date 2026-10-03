@@ -93,22 +93,47 @@ CONFIG_AUTOSTART_ARDUINO=y
 CONFIG_ARDUINO_LOOP_STACK_SIZE=8192
 
 # --- Board Support Package (espressif/esp32_s31_korvo_1) ----------------------------------------
-# These are the BSP's own display knobs, and the values are copied from the reference project for
-# this board rather than chosen: they are the ones measured to work on this silicon, and the panel
-# timings they feed are the one part of the board port that cannot be guessed.
+# These are the BSP's own display knobs. Unlike the rest of this file they are NOT copied from the
+# reference project: two of them had to change, and both are argued where they sit.
 
-# Bounce buffer mode is effectively mandatory here, not a tuning choice. A full 800x480x2 PSRAM
-# framebuffer needs ~188 DMA descriptors in INTERNAL RAM, which is not available once WiFi/BT have
-# taken their share; bounce mode streams through small internal buffers and needs ~3. Without it the
-# RGB panel fails to start outright.
-CONFIG_BSP_LCD_RGB_BOUNCE_BUFFER_MODE=y
-CONFIG_BSP_LCD_RGB_BOUNCE_BUFFER_HEIGHT=5
+# Auto refresh -- no bounce buffer. The GDMA streams the frame buffer straight to the panel.
+#
+# This is the fix for the displaced picture, and it is structural rather than a tuning. In bounce
+# mode the driver keeps its place in the frame in a SOFTWARE counter, bounce_pos_px, which advances
+# only when its refill interrupt copies the next slice out of PSRAM before the DMA has finished
+# sending the previous one. A flash write, a WiFi burst or any cache-off window can miss that
+# deadline, and every slice after the miss is then offset by a whole bounce buffer -- permanently,
+# because the recovery path (lcd_rgb_panel_try_restart_transmission, esp_lcd_rgb_panel_restart) is
+# compiled only for CONFIG_IDF_TARGET_ESP32S3 and the underrun it would report is not a hardware
+# event this SoC defines. Silent, permanent, and variable between boots: exactly what was seen.
+#
+# Without a bounce buffer there is no counter to lose. The DMA link is built with
+# mark_final = GDMA_FINAL_LINK_TO_DEFAULT (esp_lcd_panel_rgb.c:1225), so the transfer restarts at row
+# 0 of the frame buffer at the end of EVERY frame. The position lives in the DMA hardware and is
+# re-established 35 times a second; a stall can corrupt one frame but cannot accumulate.
+#
+# Cost: none. A full 800x480x2 frame buffer needs 768000/4095 = 188 DMA descriptors
+# (LCD_DMA_DESCRIPTOR_BUFFER_MAX_SIZE), at LCD_GDMA_DESCRIPTOR_ALIGN 8 bytes each -- about 1.5KB of
+# internal RAM, against the 64KB the two bounce buffers themselves were occupying.
+#
+# The price is that the frame buffer is no longer read through the CPU, so the CPU's cached drawing
+# is not automatically visible to the scanout. KorvoRgbDisplay::present() flushes it with
+# esp_cache_msync; see "WHY present() IS NOT EMPTY" in KorvoRgbDisplay.h.
+#
+# This is also the BSP's own Kconfig default; the reference project is what overrode it.
+CONFIG_BSP_LCD_RGB_REFRESH_AUTO=y
 
-# Two frame-size buffers, matching the reference. KryonOS brings its own canvas and dirty-rect
-# present path on top of this, so the BSP's second buffer is redundant for us and costs 768 KB of
-# PSRAM that is otherwise free. Left at the verified value through M1b; M2 revisits it once the panel
-# handle is actually in use and the redundancy is measurable rather than assumed.
-CONFIG_BSP_LCD_RGB_BUFFER_NUMS=2
+# ONE frame buffer, because KryonOS rasterizes directly into it -- the backend attaches its canvas to
+# the panel's own frame buffer, so there is no second buffer to flip to and no copy to pay for.
+#
+# Note what that gives up. Double buffering is what would let the driver hide a redraw behind the
+# panel's scanout, and on a panel with no GRAM of its own it is the only way to avoid seeing the
+# redraw happen. It is not available here because KryonOS's whole drawing model assumes a single
+# persistent canvas: main.cpp::loop() redraws only when the state CHANGES (drawing over the previous
+# frame), so alternating buffers would leave each frame half-drawn over the other one's contents.
+#
+# Costs 768KB of PSRAM, which with one buffer is now free.
+CONFIG_BSP_LCD_RGB_BUFFER_NUMS=1
 
 # LVGL's anti-tearing mode is deliberately NOT enabled. It only has meaning for LVGL's own render
 # loop, and KryonOS does not use LVGL -- enabling it would have the BSP fight our present path for

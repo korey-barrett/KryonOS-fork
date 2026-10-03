@@ -27,6 +27,28 @@ void* KryonSprite::createSprite(int16_t w, int16_t h) {
     return pixels();
 }
 
+void* KryonSprite::attachBuffer(uint16_t* buffer, int16_t w, int16_t h) {
+    if (canvas_) deleteSprite();
+    if (!buffer || w <= 0 || h <= 0) return nullptr;
+
+    canvas_ = new RamFramebufferDisplay(w, h);
+    if (!canvas_) return nullptr;
+
+    // Attach BEFORE init(): init() allocates only when it finds no buffer, so handing it one first
+    // is what keeps it from making a second full-size copy alongside the panel's framebuffer.
+    canvas_->attachBuffer(buffer);
+    canvas_->init();
+    if (!canvas_->ready()) {
+        delete canvas_;
+        canvas_ = nullptr;
+        return nullptr;
+    }
+
+    w_ = w;
+    h_ = h;
+    return pixels();
+}
+
 void KryonSprite::deleteSprite() {
     delete canvas_;
     canvas_ = nullptr;
