@@ -1,6 +1,5 @@
 #include "OTAManager.h"
 #include "../Network/TLSHelper.h"
-#include "Hal/Display/DisplayConfig.h"
 #include <ArduinoJson.h>
 
 Preferences OTAManager::prefs;
@@ -8,11 +7,15 @@ OTAUpdateInfo OTAManager::cachedInfo;
 OTAProgress OTAManager::currentProgress;
 bool OTAManager::bootConfirmed = false;
 unsigned long OTAManager::bootTimeMs = 0;
-// Points at THIS fork's manifest, not upstream's. A device running this firmware must not be
-// offered upstream builds: they are not the same product, and the CYD build in particular depends
-// on a partition layout upstream does not ship. TLSHelper calls setInsecure(), so no trust anchor
-// changes are needed for the host change.
-const char* OTAManager::UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/korey-barrett/KryonOS-fork/refs/heads/main/updates/esp32/v2/update.json";
+// Points at this fork's manifest rather than upstream's, on the branch for the chip variant being
+// built. A board env that does not set KRYONOS_OTA_VARIANT keeps the classic-ESP32 branch, so this
+// file builds everywhere; TLSHelper calls setInsecure(), so the host change needs no new trust anchor.
+#ifndef KRYONOS_OTA_VARIANT
+#define KRYONOS_OTA_VARIANT "esp32"
+#endif
+const char* OTAManager::UPDATE_MANIFEST_URL =
+    "https://raw.githubusercontent.com/korey-barrett/KryonOS-fork/refs/heads/"
+    KRYONOS_OTA_VARIANT "/updates/" KRYONOS_OTA_VARIANT "/v2/update.json";
 
 void OTAManager::init() {
     bootTimeMs = millis();
@@ -22,11 +25,17 @@ void OTAManager::init() {
 }
 
 String OTAManager::getBoardTargetName() {
-    // The manifest key is KRYONOS_BOARD_ID and nothing else. Keeping a second copy of the board
-    // name here (a TARGET_* ladder) is how the OTA map and the CI build matrix drifted apart
-    // before; the id now has exactly one definition, in Hal/Display/DisplayConfig.h, and the
-    // release workflow's board list must spell the same strings.
-    return KRYONOS_BOARD_ID;
+#if defined(TARGET_CARDPUTER)
+    return "m5stack-cardputer";
+#elif defined(TARGET_T_HMI)
+    return "lilygo-t-hmi";
+#elif defined(TARGET_CYD)
+    return "esp32-cyd-28";
+#elif defined(CONFIG_IDF_TARGET_ESP32S3) || (ARDUINO_USB_CDC_ON_BOOT == 1)
+    return "esp32-s3-devkitc-1-n16r8";
+#else
+    return "esp32doit-devkit-v1";
+#endif
 }
 
 bool OTAManager::isVerGreater(const String& newVer, const String& currVer) {

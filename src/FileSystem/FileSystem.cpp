@@ -740,6 +740,23 @@ void FileSystem::unmountSD() {
     sdMounted = false;
 }
 
+// Set by suspendSD() when it actually released a mounted volume, so resumeSD() restores only what
+// was there before and never tries to mount a card the board did not have.
+static bool sdSuspended = false;
+
+void FileSystem::suspendSD() {
+    if (!sdMounted) return;
+    unmountSD();
+    sdSuspended = true;
+    Serial.println("[SD] Volume released for the flash update.");
+}
+
+void FileSystem::resumeSD() {
+    if (!sdSuspended) return;
+    sdSuspended = false;
+    Serial.println(mountSD() ? "[SD] Volume remounted." : "[SD] Volume could not be remounted.");
+}
+
 bool FileSystem::formatSD() {
     return false; // Not natively supported on standard Arduino core without custom FAT commands
 }

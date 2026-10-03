@@ -319,6 +319,14 @@
   0xe000 boot_app0.bin \
   0x10000 firmware.bin</pre>
 
+<p><strong>Do not write a <code>firmware.factory.bin</code> at offset <code>0x0</code></strong> on a device
+you have already set up. A factory image spans the whole app region, so it overwrites the
+<code>nvs</code> partition at <code>0x9000</code> — you will have to re-pair KryonCloud (the device
+comes back as a <em>new</em> board, and the old entry has to be deleted) and re-enter WiFi. The
+per-region command above is safe: none of those four offsets lies inside <code>nvs</code>. Offsets,
+per-board layouts, and what each kind of reflash costs are in
+<strong><a href="Documentation/Flash_and_Persistence.md">Flash &amp; Persistence</a></strong>.</p>
+
 <h3>Option 2: Build &amp; Flash via PlatformIO</h3>
 <p>To compile and flash from source:</p>
 
@@ -358,6 +366,10 @@ pio run -e esp32s31-default -t upload
   <tr>
     <td><a href="Documentation/Hardware_Architecture.md"><strong>Hardware Architecture</strong></a></td>
     <td>Hardware configuration and system architecture.</td>
+  </tr>
+    <tr>
+    <td><a href="Documentation/Flash_and_Persistence.md"><strong>Flash &amp; Persistence</strong></a></td>
+    <td>Per-board flash layout, and what a reflash costs you (WiFi, KryonCloud pairing, web password).</td>
   </tr>
     <tr>
     <td><a href="https://github.com/Haris16-code/KryonOS/wiki/How-To-Setup-KryonCloud"><strong>Setup Your KryonCloud</strong></a></td>
