@@ -19,6 +19,16 @@ static const char* WIFI_CREDS_ENC_SD    = "/sd/system/wifi_credentials.enc";
 static const char* CAPTIVE_PORTAL_URL   = "http://connectivitycheck.gstatic.com/generate_204";
 
 void WiFiManager::init() {
+    // Cap every WiFi scan at 15 seconds.
+    //
+    // arduino's scan machinery reports "still running" until its own timeout, and that defaults to 60
+    // SECONDS (WiFiScanClass::_scanTimeout). smartAutoConnect() below scans synchronously and is
+    // called from init() and from the Settings touch handler, so that default is the difference
+    // between a scan that recovers in a few seconds and one that freezes the UI for a minute with
+    // nothing on screen. A real 2.4GHz scan finishes in two to four seconds, so 15s is roughly a
+    // 4x margin -- this only shortens the pathological case, it does not cut short a scan that works.
+    WiFi.setScanTimeout(15000);
+
     autoMigrateLegacyCredentials();
     loadKnownNetworks();
 
