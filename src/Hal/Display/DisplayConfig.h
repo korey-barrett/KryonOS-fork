@@ -58,6 +58,8 @@
     #define KRYONOS_BOARD_ID "esp32s31-default"
   #elif defined(TARGET_WAVESHARE_S3_LCD21B)
     #define KRYONOS_BOARD_ID "waveshare-s3-lcd21b"
+  #elif defined(TARGET_ESP32S31_KORVO1)
+    #define KRYONOS_BOARD_ID "esp32s31-korvo1"
   #elif defined(TARGET_CYD)
     #define KRYONOS_BOARD_ID "esp32-cyd-28"
   #elif defined(TARGET_T_HMI)
