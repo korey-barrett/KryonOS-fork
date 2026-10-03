@@ -191,6 +191,36 @@ def test_keyboard_paging_240x100() -> None:
     check(lm.kb_key_rect(m, rows, 0, 1) != (0, 0, 0, 0), "page-1's first row has a cell")
 
 
+def test_waveshare_keyboard_240x320() -> None:
+    """The Waveshare 2.1B declares its own keyboard grid; the board's canvas is still 240x320."""
+    print("waveshare-s3-lcd21b keyboard (board-declared 6x6 grid on a 240x320 canvas):")
+    shape = lm.KB_SHAPE["waveshare-s3-lcd21b"]
+    m = lm.compute(240, 320, shape)
+
+    check_eq((m["kbCols"], m["kbRows"]), (6, 6), "grid is 6x6")
+    check_eq((m["kbButtonCount"], m["kbButtonW"]), (6, 40), "six 40px top buttons")
+    check_eq((m["kbKeyW"], m["kbKeyH"]), (40, 35), "keys are 40x35")
+    check_eq(m["kbCharPages"], 2, "two character pages (letters+digits, then symbols)")
+    # The whole grid fits, so the ROW pager is inert and no strip is drawn -- the SYM button owns
+    # page switching on this board, not the pager.
+    check_eq(m["kbRowsPerPage"], 6, "all six rows fit")
+    check_eq(m["kbPages"], 1, "row pager is inert")
+    check_eq(m["kbPagerH"], 0, "no pager strip")
+    # Chrome is shared with the reference boards, so the aperture-scaled UI keeps the same layout.
+    check_eq((m["kbPromptY"], m["kbTextBox"], m["kbButtonRow"], m["kbGridTop"]),
+             (10, (5, 30, 230, 30), (0, 70, 240, 30), 110), "chrome matches the reference layout")
+    # The grid reaches both canvas edges exactly: no clipped column, no unreachable row.
+    check_eq(lm.kb_key_rect(m, 0, 0, 0), (0, 110, 40, 35), "key (0,0)")
+    check_eq(lm.kb_key_rect(m, 5, 5, 0), (200, 285, 40, 35), "key (5,5) bottom-right")
+    check_eq(lm.kb_row_from_y(m, 110, 0), 0, "y=110 -> row 0")
+    check_eq(lm.kb_row_from_y(m, 319, 0), 5, "y=319 -> row 5")
+    check_eq(lm.kb_row_from_y(m, 109, 0), -1, "above the grid -> -1")
+    # The point of the change: the failing axis is twice as wide as the shared grid's.
+    shared = lm.compute(240, 320)
+    check_eq(shared["kbKeyW"], 20, "shared 12x4 key width is still 20")
+    check(m["kbKeyW"] > shared["kbKeyW"], f"keys are wider (got {m['kbKeyW']})")
+
+
 def test_other_resolutions_sane() -> None:
     print("alternative resolutions stay non-degenerate:")
     for (w, h) in [(240, 135), (320, 480), (480, 320), (800, 480)]:
@@ -234,9 +264,10 @@ def test_board_discovery() -> None:
     # One default board per chip type; all three set the canvas explicitly to 240x320.
     for env in ("esp32-default", "esp32s3-default", "esp32s31-default"):
         check_eq(boards.get(env), (240, 320, 0), f"{env} -> 240x320 rotation 0")
-    # The one product board so far, and the only non-SPI panel: a square 480x480 RGB canvas.
-    check_eq(boards.get("waveshare-s3-lcd21b"), (480, 480, 0),
-             "waveshare-s3-lcd21b -> 480x480 rotation 0")
+    # The one product board so far, and the only non-SPI panel: an RGB panel whose CANVAS is
+    # 240x320, blitted 6/5 into the 480x480 round bezel (hence 240x320 here, not the panel's size).
+    check_eq(boards.get("waveshare-s3-lcd21b"), (240, 320, 0),
+             "waveshare-s3-lcd21b -> 240x320 rotation 0")
     # The legacy boards are examples, not build targets: they must NOT be discovered.
     for env in ("m5stack-cardputer", "esp32-cyd-28", "lilygo-t-hmi", "esp32-s3-devkitc-1-n16r8",
                 "esp32doit-devkit-v1"):
@@ -250,6 +281,7 @@ def main() -> int:
     test_list_rows_240()
     test_short_panel_240x135()
     test_keyboard_paging_240x100()
+    test_waveshare_keyboard_240x320()
     test_other_resolutions_sane()
     test_degenerate_canvas()
     test_board_discovery()

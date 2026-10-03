@@ -17,6 +17,9 @@
 //   itemsPerPage 7 · scrollbar x 232 · app-exit (200,0,40,30)
 //   progress bar (30,160,180,20) · dialog row y 230 · dialog gap 30
 //   notification card (8,·,224,42, r6) shadow 240x64 hiddenY -44 · keyboard grid 12x4 @ y110
+// The keyboard grid's 12x4 is the DEFAULT shape; a board that declares its own (see KRYONOS_KB_*
+// below) keeps the same chrome -- prompt y10, text box y30, button row y70, grid top y110 -- and
+// only subdivides the grid differently.
 // Two footer conventions live here, both pinned to their historical 240x320 geometry:
 //   footerButton* — even thirds (UP/SEL/DN), used by the Launcher, Installer, Settings, WebServer
 //   footerSlot*   — uneven 70/130/200 zones (BACK/UP/SEL/DN), used by the App Store; label centres
@@ -25,6 +28,35 @@
 // ---------------------------------------------------------------------------------------------
 
 #include <stdint.h>
+
+// ---------------------------------------------------------------------------------------------
+// On-screen keyboard: grid shape.
+//
+// This is a BOARD fact, not a resolution one, which is why it is a compile-time constant here and
+// not something compute() derives from w/h. Key WIDTH is fixed by the column count (w / cols), so a
+// finger-sized key cannot be had by scaling -- the only lever is fewer columns and more rows. This
+// board's panel is capacitive, where a 20x52 px key (the shared 12x4 grid) is too narrow to hit
+// reliably, so it uses 6x6 instead: 40x35 px, twice as wide on the axis that was failing.
+//
+// Page 0 of the key table is letters then digits (26 + 10 fills 6x6 exactly, so a WiFi password --
+// the common case -- never needs a page switch); page 1 is the symbols. The shared grid holds its
+// whole set in one page, so it declares 1.
+//
+// Published from this header rather than kept in UiLayout.cpp so the metrics below and the key
+// table in Keyboard/MyKeyboard.cpp are compiled from the same numbers and cannot disagree about the
+// grid's dimensions. tools/preview/layout_model.py mirrors these per env.
+// ---------------------------------------------------------------------------------------------
+#if defined(TARGET_WAVESHARE_S3_LCD21B)
+#define KRYONOS_KB_COLS 6
+#define KRYONOS_KB_ROWS 6
+#define KRYONOS_KB_BUTTONS 6
+#define KRYONOS_KB_CHAR_PAGES 2
+#else
+#define KRYONOS_KB_COLS 12
+#define KRYONOS_KB_ROWS 4
+#define KRYONOS_KB_BUTTONS 5
+#define KRYONOS_KB_CHAR_PAGES 1
+#endif
 
 struct UiRect {
     int16_t x, y, w, h;
@@ -90,6 +122,13 @@ struct UiMetrics {
     int16_t kbButtonCount, kbButtonW;
     int16_t kbGridTop;
     int16_t kbCols, kbRows, kbKeyW, kbKeyH;
+
+    // How many pages the key table has. This is NOT the row pager below: a page here is a different
+    // set of characters (letters+digits / symbols), selected by the SYM button, while kbPages is a
+    // page of ROWS shown when the grid is too tall for the panel. They are independent, and a board
+    // is expected to use one or the other -- a board with character pages fits its whole grid, so its
+    // kbPages is 1 and the pager strip is never drawn.
+    int16_t kbCharPages;
 
     // Paging. A very short panel cannot fit all kbRows at a legible key height, so the grid shows
     // kbRowsPerPage rows at a time and a pager strip appears beneath it. When the panel is tall

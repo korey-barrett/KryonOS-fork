@@ -80,16 +80,20 @@ UiMetrics UiLayout::compute(int16_t w, int16_t h) {
     m.shadowW   = w;
     m.shadowH   = (int16_t)(m.cardH + 22);
 
-    // On-screen keyboard (12x4 QWERTY grid under a 5-button row).
+    // On-screen keyboard. The grid SHAPE is a board fact (see KRYONOS_KB_* in UiLayout.h): a
+    // capacitive panel needs keys wide enough for a finger, and key width is fixed by the column
+    // count, so a board that needs wider keys declares fewer columns and more rows. The chrome
+    // below -- a 5-button row on the reference boards, a 30px box at y30 -- is shared.
     m.kbPromptX     = 5;
-    m.kbButtonCount = 5;
-    m.kbCols        = 12;
-    m.kbRows        = 4;
+    m.kbButtonCount = KRYONOS_KB_BUTTONS;
+    m.kbCols        = KRYONOS_KB_COLS;
+    m.kbRows        = KRYONOS_KB_ROWS;
+    m.kbCharPages   = KRYONOS_KB_CHAR_PAGES;
     m.kbKeyW        = (int16_t)(w / m.kbCols);
     m.kbButtonW     = (int16_t)(w / m.kbButtonCount);
 
     // A full-height panel keeps the historical chrome: prompt at y10, a 30px text box at y30, the
-    // 5-button row at y70, and the grid from y110. A short panel cannot afford that — 135px minus
+    // button row at y70, and the grid from y110. A short panel cannot afford that — 135px minus
     // 110px of chrome would leave 6px keys — so the chrome compresses and the grid takes the rest.
     if (h < 240) {
         m.kbPromptY   = 4;

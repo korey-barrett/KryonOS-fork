@@ -16,6 +16,19 @@ from typing import Dict, Tuple
 
 Rect = Tuple[int, int, int, int]
 
+# Keyboard grid shapes, per board. Mirrors the KRYONOS_KB_* block in src/UI/UiLayout.h, which is the
+# source of truth; add a board there and here together, or the preview stops modelling it.
+#
+# A page here is a different CHARACTER SET (letters+digits / symbols), selected by the SYM button --
+# not the row pager, which is derived from the panel height further down. A board uses one or the
+# other: a board with character pages fits its whole grid, so its row-pager page count stays 1.
+KB_SHAPE_DEFAULT = {"cols": 12, "rows": 4, "buttons": 5, "charPages": 1}
+KB_SHAPE: Dict[str, Dict] = {
+    # 480x480 round capacitive panel: the shared 12x4 grid gives 20x52 canvas-px keys, too narrow to
+    # hit. 6x6 gives 40x35 -- twice as wide, on the axis that was failing.
+    "waveshare-s3-lcd21b": {"cols": 6, "rows": 6, "buttons": 6, "charPages": 2},
+}
+
 # Footer button slots (mirrors UiFooterButton in UiLayout.h).
 FOOTER_UP = 0
 FOOTER_SEL = 1
@@ -28,8 +41,14 @@ SLOT_SEL = 2
 SLOT_DN = 3
 
 
-def compute(w: int, h: int) -> Dict:
-    """Return the layout metrics dict for a w x h logical canvas (post-rotation)."""
+def compute(w: int, h: int, kb: Dict = None) -> Dict:
+    """Return the layout metrics dict for a w x h logical canvas (post-rotation).
+
+    ``kb`` is the board's keyboard grid shape -- see KB_SHAPE. It defaults to the shared 12x4 grid,
+    which is what a resolution alone implies; a board that declares its own (see KRYONOS_KB_* in
+    UiLayout.h) passes it in.
+    """
+    kb = kb or KB_SHAPE_DEFAULT
     m: Dict = {"w": w, "h": h, "landscape": w > h}
     mind = min(w, h)
 
@@ -85,10 +104,14 @@ def compute(w: int, h: int) -> Dict:
     m["shadowW"] = w
     m["shadowH"] = m["cardH"] + 22
 
+    # On-screen keyboard. The grid SHAPE is a board fact (see KB_SHAPE / KRYONOS_KB_* in UiLayout.h):
+    # key width is fixed by the column count, so a board whose panel needs finger-sized keys declares
+    # fewer columns and more rows. The chrome below is shared.
     m["kbPromptX"] = 5
-    m["kbButtonCount"] = 5
-    m["kbCols"] = 12
-    m["kbRows"] = 4
+    m["kbButtonCount"] = kb["buttons"]
+    m["kbCols"] = kb["cols"]
+    m["kbRows"] = kb["rows"]
+    m["kbCharPages"] = kb["charPages"]
     m["kbKeyW"] = max(1, w // m["kbCols"])
     m["kbButtonW"] = w // m["kbButtonCount"]
 

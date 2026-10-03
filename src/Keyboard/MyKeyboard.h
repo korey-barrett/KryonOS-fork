@@ -12,8 +12,12 @@ public:
 
 private:
     static KryonDisplay *tftInstance;
-    static void drawKeyboard(String currentText, String promptMsg, bool caps, int selectedX, int selectedY, int page);
-    static void handleTouch(uint16_t x, uint16_t y, String &currentText, bool &caps, bool &done, int &page);
+    // `page` is the ROW pager (which page of rows the grid shows, from the metrics); `charPage` is
+    // the CHARACTER set (letters+digits / symbols, from the key table). They are separate inputs
+    // because a board uses one or the other, and merging them into one variable is how a short
+    // panel with a symbols page would silently start drawing the wrong rows.
+    static void drawKeyboard(String currentText, String promptMsg, bool caps, int selectedX, int selectedY, int page, int charPage);
+    static void handleTouch(uint16_t x, uint16_t y, String &currentText, bool &caps, bool &done, int &page, int &charPage);
 };
 
 #endif // MY_KEYBOARD_H
