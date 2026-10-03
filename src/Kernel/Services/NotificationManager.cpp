@@ -139,6 +139,12 @@ void NotificationManager::restoreBgFull(KryonDisplay* tft) {
 void NotificationManager::renderSpriteContent(const NotificationItem& item) {
     if (!s_cardSprite) return;
 
+    // The card is a sprite with its own text size, so it does not inherit the one UiLayout's scale
+    // gives the screen. Set both here: the size, and the pixel offsets below, which were the 240x320
+    // card's and would otherwise huddle in the corner of a card twice as tall.
+    const int16_t s = (int16_t)UiLayout::current().scale;
+    s_cardSprite->setTextSize((uint8_t)s);
+
     uint16_t bgColor = 0x10A2;
     uint16_t borderColor = 0x4208;
     uint16_t badgeColor = 0x07FF;
@@ -158,20 +164,24 @@ void NotificationManager::renderSpriteContent(const NotificationItem& item) {
     s_cardSprite->fillRoundRect(0, 0, CARD_W, CARD_H, CARD_R, bgColor);
     s_cardSprite->drawRoundRect(0, 0, CARD_W, CARD_H, CARD_R, borderColor);
 
-    // Accent badge circle
-    s_cardSprite->fillCircle(16, 21, 10, badgeColor);
+    // Accent badge circle. The historical centre is (16, 21) on a 42px card -- 16 in from the left,
+    // and half the card's height down -- so it is derived from CARD_H rather than scaled, keeping it
+    // centred whatever the card's height came out as.
+    const int16_t badgeCx = (int16_t)(16 * s);
+    const int16_t badgeCy = (int16_t)(CARD_H / 2);
+    s_cardSprite->fillCircle(badgeCx, badgeCy, (int16_t)(10 * s), badgeColor);
     s_cardSprite->setTextColor(TFT_BLACK, badgeColor);
     s_cardSprite->setTextDatum(MC_DATUM);
-    s_cardSprite->drawString(badgeText, 16, 21, 2);
+    s_cardSprite->drawString(badgeText, badgeCx, badgeCy, 2);
 
     // Title
     s_cardSprite->setTextDatum(TL_DATUM);
     s_cardSprite->setTextColor(TFT_WHITE, bgColor);
-    s_cardSprite->drawString(item.title, 34, 6, 2);
+    s_cardSprite->drawString(item.title, (int16_t)(34 * s), (int16_t)(6 * s), 2);
 
     // Message
     s_cardSprite->setTextColor(0xBDD7, bgColor);
-    s_cardSprite->drawString(item.message, 34, 24, 1);
+    s_cardSprite->drawString(item.message, (int16_t)(34 * s), (int16_t)(24 * s), 1);
 }
 
 // ── Push the card sprite to the screen at position Y ────────────────────────

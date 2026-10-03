@@ -763,6 +763,48 @@ pixel-identical at 240×320 at each step:
     the AI panel's scroll band is the drawn window rather than the enclosing card (the card is 6px
     taller), and the Storage file list's tap band is `cloudListBottom(m)` rather than a flat y285,
     which for the no-toast case now matches the fourth card's bottom edge exactly.
+  - **3f — the whole layout at scale** (done). Phases 1–3e made every region *proportional*, which is
+    not the same as making it *bigger*: `compute()` still multiplied its fixed pixels by nothing, so
+    the 800×480 Korvo-1 got a 30px header, 30px rows and 16px body text — 240×320 furniture with three
+    times the area around it. Text that size is hard to read at arm's length and a 30px button is not
+    a touch target, which is what the panel actually showed. `UiLayout.h` now publishes `uiScale(w,h)`
+    — `min(w,h) / 240`, clamped to `[1,3]` — and `compute()` multiplies every fixed-pixel constant by
+    it, storing the result in `UiMetrics::scale`. Anything already proportional (`inset`, `slotEdge`,
+    `dialogButtonGap`, `kbKeyW`, `kbButtonW`) is deliberately left alone, and the `h < 240` keyboard
+    threshold stays a panel height rather than becoming a pixel dimension. The Korvo-1 therefore
+    renders a 60px header, 60px rows, 32px body text, an 80×60 app-exit button and 66×65 keyboard keys.
+
+    The scale is 1 on every board that predates this one, so those layouts are bit-identical and no
+    build flag was needed: esp32, esp32s3 and `waveshare-s3-lcd21b` all declare a 240×320 canvas (the
+    Waveshare's 480×480 panel is addressed through its round-aperture upscale, not a larger canvas),
+    and 240×135 resolves to 0 and clamps up to 1. `tools/preview/test_layout.py` still pins every
+    historical 240×320 / 240×135 value and passes unchanged.
+
+    Text is scaled *separately*, by the backend rather than by ~200 call sites: `kryon_text` already
+    takes a `size` (TFT_eSPI's `textsize`) through `setTextSize()`, and `KryonSprite` feeds it into the
+    draw path, the measure path and the datum switch together — so screens that measure their text to
+    lay it out stay correct for free. `KorvoRgbDisplay::init()` sets the canvas's size from `uiScale()`,
+    and `NotificationManager` sets its own sprite's from the same number. This is also why only font
+    ids 1, 2 and 4 exist: they are the vendored ones (8 / 16 / 32 px), and any other id renders nothing
+    *and measures zero*. `SettingsUI`'s OTA readout had been asking for font 6 on every full-height
+    panel, which is why the download percentage was invisible; it asks for `fontHeader` now, and the
+    JS `drawString` binding snaps an unsupported id to the nearest supported size instead of silently
+    dropping the text.
+
+    Scaling the metrics exposed the places that were *not* reading them. The app-exit button was drawn
+    at `(200,0,40,30)` in four places in `HarixKernel.cpp` and hit-tested at `tx >= 200 && ty <= 40` in
+    five, all spelled out by hand; the fatal-error screens' text offsets, the WiFi alert modal, the
+    storage permission prompt (whose OK hit box was 10px larger than the button it belonged to), the
+    App Store and Installer progress fills, and the notification card's in-sprite literals were in the
+    same position. All of them now come from the metrics — the progress fills from the same
+    `progressBar` their outline is drawn with — so each button and the zone that accepts its tap are
+    one rectangle. The storage prompt sizes its own panel from the room between the header and the
+    footer, because three stacked buttons at twice the height do not fit the 480px panel otherwise.
+
+    Deliberately **not** done, and worth revisiting once the new scale has been seen on hardware:
+    `KryonCloudUI`'s inner literals, `WebServerAppUI`'s fixed field heights, the `HelpCenterUI` viewer's
+    line pitch and the `SettingsUI` WiFi signal bars. Each sits inside an already metric-derived panel,
+    so they read as slightly small rather than broken.
 - **Phase 4** — an `ITouchDriver` interface behind the existing `TouchDriver` facade, adding capacitive
   controllers (FT6236 / GT911 / CST816) alongside XPT2046. **Done.** `TouchDriver` is now a pure
   forwarder over a factory-selected `ITouchDriver` (`src/Hal/Touch/`), the raw→pixel mapping moved to

@@ -2267,8 +2267,11 @@ static UiRect otaPanel(const UiMetrics& m) {
              (int16_t)(m.frame.w - 2), (int16_t)(m.frame.h - 2) };
 }
 
-// The big centred readout: font 6 is 48px tall, which only fits a full-height panel.
-static uint8_t otaBigFont(const UiMetrics& m)   { return (m.h >= 240) ? 6 : (uint8_t)m.fontHeader; }
+// The big centred readout. This used to be font 6 on a full-height panel, but only font ids 1, 2 and
+// 4 are vendored (see KryonText.h) and an id with no glyph data renders NOTHING -- so the download
+// percentage has been invisible on every full-height board, this one included. It asks for the
+// header font now, which the backend's text size scales up.
+static uint8_t otaBigFont(const UiMetrics& m)   { return (uint8_t)m.fontHeader; }
 static uint8_t otaTitleFont(const UiMetrics& m) { return (m.h >= 240) ? 4 : (uint8_t)m.fontHeader; }
 
 static UiRect otaBarRect(const UiMetrics& m) {

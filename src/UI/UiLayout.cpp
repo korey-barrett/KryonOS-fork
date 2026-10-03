@@ -16,54 +16,68 @@ UiMetrics UiLayout::compute(int16_t w, int16_t h) {
 
     const int16_t mind = (w < h) ? w : h;
 
-    // Screen-edge inset: 3 at 240x320, never below 2 or above 8.
+    // The 240x320 layout scaled to this panel. Every literal below that is a pixel dimension -- as
+    // opposed to a proportion of w or h -- is multiplied by it, so a bigger panel gets the same
+    // layout, drawn bigger, rather than 240x320 furniture stranded in the middle of it. At 240x320
+    // s is 1 and this file produces the historical numbers exactly.
+    const int16_t s = uiScale(w, h);
+    m.scale = (uint8_t)s;
+
+    // Screen-edge inset: 3 at 240x320, never below 2 or above 8. Already proportional to the panel,
+    // so it is deliberately NOT multiplied by s.
     int16_t inset = mind / 80;
     if (inset < 2) inset = 2;
     if (inset > 8) inset = 8;
     m.inset = (uint8_t)inset;
 
     m.frame  = { inset, inset, (int16_t)(w - 2 * inset), (int16_t)(h - 2 * inset) };
-    m.header = { (int16_t)(inset + 3), (int16_t)(inset + 3), (int16_t)(w - 2 * (inset + 3)), 30 };
-    m.headerTextY = (int16_t)(m.header.y + 15);
+    m.header = { (int16_t)(inset + 3), (int16_t)(inset + 3), (int16_t)(w - 2 * (inset + 3)),
+                 (int16_t)(30 * s) };
+    m.headerTextY = (int16_t)(m.header.y + 15 * s);
 
-    m.footer      = { (int16_t)(inset + 2), (int16_t)(h - 35), (int16_t)(w - 2 * (inset + 2)), 30 };
-    m.footerTextY = (int16_t)(m.footer.y + 15);
+    const int16_t chrome = (int16_t)(35 * s); // footer's 30 plus the historical 5px gap above it
+    m.footer      = { (int16_t)(inset + 2), (int16_t)(h - chrome), (int16_t)(w - 2 * (inset + 2)),
+                      (int16_t)(30 * s) };
+    m.footerTextY = (int16_t)(m.footer.y + 15 * s);
 
-    m.list = { (int16_t)(inset + 7), (int16_t)(inset + 42), (int16_t)(w - 2 * (inset + 7)),
-               (int16_t)(m.footer.y - (inset + 42) - 10) };
+    m.list = { (int16_t)(inset + 7 * s), (int16_t)(inset + 42 * s), (int16_t)(w - 2 * (inset + 7 * s)),
+               (int16_t)(m.footer.y - (inset + 42 * s) - 10 * s) };
     if (m.list.h < 0) m.list.h = 0;
 
     // Row height is 30 on a normal panel. A short one cannot afford that — 240x135 would show a
     // single row — so shrink toward a floor, keeping at least ~4 rows on screen. rowFillH stays 5px
     // shorter than the row so the highlight keeps its inset.
-    m.rowH = 30;
-    if (m.list.h < 4 * 30) {
+    m.rowH = (int16_t)(30 * s);
+    if (m.list.h < 4 * m.rowH) {
         m.rowH = (int16_t)(m.list.h / 4);
-        if (m.rowH < 14) m.rowH = 14;
+        const int16_t rowMin = (int16_t)(14 * s);
+        if (m.rowH < rowMin) m.rowH = rowMin;
     }
-    m.rowFillH    = (int16_t)(m.rowH - 5);
-    m.rowTextPadX = (int16_t)(inset + 2);
+    m.rowFillH    = (int16_t)(m.rowH - 5 * s);
+    m.rowTextPadX = (int16_t)(inset + 2 * s);
 
     m.itemsPerPage = (m.rowH > 0) ? (int16_t)(m.list.h / m.rowH) : 0;
     if (m.itemsPerPage < 1) m.itemsPerPage = 1;
 
-    m.scrollX        = (int16_t)(w - 8);
-    m.scrollW        = 3;
-    m.scrollThumbMin = 20;
+    m.scrollX        = (int16_t)(w - 8 * s);
+    m.scrollW        = (int16_t)(3 * s);
+    m.scrollThumbMin = (int16_t)(20 * s);
 
     m.centerX = (int16_t)(w / 2);
     m.centerY = (int16_t)(h / 2);
 
-    m.appExitButton = { (int16_t)(w - 40), 0, 40, 30 };
-    m.progressBar   = { (int16_t)(w / 8), m.centerY, (int16_t)(w - w / 4), 20 };
+    m.appExitButton = { (int16_t)(w - 40 * s), 0, (int16_t)(40 * s), (int16_t)(30 * s) };
+    m.progressBar   = { (int16_t)(w / 8), m.centerY, (int16_t)(w - w / 4), (int16_t)(20 * s) };
     // The historical y=100 sits 55px below list.y (45) on a 240x320 canvas. Anchoring it to the
     // list instead of the screen keeps it inside the list on a short panel, where y=100 would land
     // on the footer.
-    m.listMessageY  = (int16_t)(m.list.y + 55);
+    m.listMessageY  = (int16_t)(m.list.y + 55 * s);
 
-    m.dialogButtonRowY = (int16_t)(h - 90);
+    m.dialogButtonRowY = (int16_t)(h - 90 * s);
     m.dialogButtonGap  = (int16_t)(w / 8);
 
+    // Font ids are NOT scaled: only 1, 2 and 4 have glyph data. Their rendered size is the
+    // backend's setTextSize, which is set from this same scale -- see uiScale() in the header.
     m.fontSmall  = 1;
     // Body text must fit inside a row: a short panel drops to the 8px cell, because the larger
     // font would not fit a 14px row. The header keeps its own size — it has a full-width 30px bar.
@@ -71,20 +85,20 @@ UiMetrics UiLayout::compute(int16_t w, int16_t h) {
     m.fontHeader = (mind >= 300) ? 4 : 2;
 
     // Notification card: 8px gutters, 42px tall on normal panels, thinner on short ones.
-    m.cardX     = 8;
-    m.cardW     = (int16_t)(w - 16);
-    m.cardH     = (h >= 240) ? 42 : 30;
-    m.cardR     = 6;
-    m.restingY  = 8;
-    m.hiddenY   = (int16_t)(-(m.cardH + 2));
+    m.cardX     = (int16_t)(8 * s);
+    m.cardW     = (int16_t)(w - 16 * s);
+    m.cardH     = (h >= 240) ? (int16_t)(42 * s) : (int16_t)(30 * s);
+    m.cardR     = (int16_t)(6 * s);
+    m.restingY  = (int16_t)(8 * s);
+    m.hiddenY   = (int16_t)(-(m.cardH + 2 * s));
     m.shadowW   = w;
-    m.shadowH   = (int16_t)(m.cardH + 22);
+    m.shadowH   = (int16_t)(m.cardH + 22 * s);
 
     // On-screen keyboard. The grid SHAPE is a board fact (see KRYONOS_KB_* in UiLayout.h): a
     // capacitive panel needs keys wide enough for a finger, and key width is fixed by the column
     // count, so a board that needs wider keys declares fewer columns and more rows. The chrome
     // below -- a 5-button row on the reference boards, a 30px box at y30 -- is shared.
-    m.kbPromptX     = 5;
+    m.kbPromptX     = (int16_t)(5 * s);
     m.kbButtonCount = KRYONOS_KB_BUTTONS;
     m.kbCols        = KRYONOS_KB_COLS;
     m.kbRows        = KRYONOS_KB_ROWS;
@@ -96,21 +110,21 @@ UiMetrics UiLayout::compute(int16_t w, int16_t h) {
     // button row at y70, and the grid from y110. A short panel cannot afford that — 135px minus
     // 110px of chrome would leave 6px keys — so the chrome compresses and the grid takes the rest.
     if (h < 240) {
-        m.kbPromptY   = 4;
-        m.kbTextBox   = { 5, 20, (int16_t)(w - 10), 20 };
-        m.kbButtonRow = { 0, 44, w, 24 };
-        m.kbGridTop   = 72;
+        m.kbPromptY   = (int16_t)(4 * s);
+        m.kbTextBox   = { (int16_t)(5 * s), (int16_t)(20 * s), (int16_t)(w - 10 * s), (int16_t)(20 * s) };
+        m.kbButtonRow = { 0, (int16_t)(44 * s), w, (int16_t)(24 * s) };
+        m.kbGridTop   = (int16_t)(72 * s);
     } else {
-        m.kbPromptY   = 10;
-        m.kbTextBox   = { 5, 30, (int16_t)(w - 10), 30 };
-        m.kbButtonRow = { 0, 70, w, 30 };
-        m.kbGridTop   = 110;
+        m.kbPromptY   = (int16_t)(10 * s);
+        m.kbTextBox   = { (int16_t)(5 * s), (int16_t)(30 * s), (int16_t)(w - 10 * s), (int16_t)(30 * s) };
+        m.kbButtonRow = { 0, (int16_t)(70 * s), w, (int16_t)(30 * s) };
+        m.kbGridTop   = (int16_t)(110 * s);
     }
 
     // Hold out for a legible key height rather than shrinking the keys to nothing; if holding out
     // costs a row, the pager strip pays for it. Only a panel shorter than ~120px ever pages.
-    const int16_t kbMinKeyH = (m.fontBody >= 2) ? 16 : 12;
-    const int16_t kbPagerH  = (int16_t)(m.fontBody * 10 + 2);
+    const int16_t kbMinKeyH = (int16_t)((m.fontBody >= 2) ? 16 * s : 12 * s);
+    const int16_t kbPagerH  = (int16_t)((m.fontBody * 10 + 2) * s);
     int rows = (h - m.kbGridTop) / kbMinKeyH;
     m.kbPagerH = 0;
     if (rows < m.kbRows) {

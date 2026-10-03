@@ -2,6 +2,7 @@
 #include "../../Runtime/JSBindings.h"
 #include "../../FileSystem/FileSystem.h"
 #include "../../Settings/TouchDriver.h"
+#include "../../UI/UiLayout.h"
 #include "../Services/NotificationManager.h"
 #include "../Services/IPCManager.h"
 
@@ -77,6 +78,50 @@ static void printToAllSerials(const String& str) {
 #endif
 }
 
+// ---------------------------------------------------------------------------------------------
+// The fatal-error screens below.
+//
+// Three of them are the same panel -- a red field, "Out Of Ram Error", three lines of advice and a
+// white "X" -- spelled out once per failure path, in 240x320 pixels. They are drawn at the UiLayout
+// scale now (the backend sets the canvas's text size from it), so those fixed offsets would push a
+// doubled glyph height into the next line. Everything here is derived from the metrics instead, once,
+// so the copies cannot disagree with each other or with the panel.
+//
+// The "X" is the only way off these screens, and it runs on a path that has already given up, so its
+// tap zone is deliberately generous: the button rectangle itself plus the strip below it that the
+// historical `tx >= 200 && ty <= 40` also accepted.
+// ---------------------------------------------------------------------------------------------
+static void drawOutOfRamPanel(KryonDisplay* tft) {
+    if (!tft) return;
+    const int16_t s = (int16_t)UiLayout::current().scale;
+    tft->fillScreen(TFT_RED);
+    tft->setTextColor(TFT_WHITE, TFT_RED);
+    tft->drawString("Out Of Ram Error", (int16_t)(10 * s), (int16_t)(20 * s), 4);
+    tft->drawString("Please turn off WiFi in", (int16_t)(10 * s), (int16_t)(60 * s), 2);
+    tft->drawString("setting to free the ram", (int16_t)(10 * s), (int16_t)(80 * s), 2);
+    tft->drawString("and make this app running", (int16_t)(10 * s), (int16_t)(100 * s), 2);
+}
+
+static void drawFatalExitButton(KryonDisplay* tft) {
+    if (!tft) return;
+    const UiMetrics& m = UiLayout::current();
+    const UiRect& b = m.appExitButton;
+    tft->fillRoundRect(b.x, b.y, b.w, b.h, (int32_t)(5 * m.scale), TFT_WHITE);
+    tft->setTextColor(TFT_RED, TFT_WHITE);
+    tft->drawString("X", (int16_t)(b.x + 15 * m.scale), (int16_t)(b.y + 8 * m.scale), 2);
+}
+
+static void waitForFatalExitTap() {
+    const UiMetrics& m = UiLayout::current();
+    const UiRect& b = m.appExitButton;
+    const int16_t tapBottom = (int16_t)(b.y + b.h + 10 * m.scale);
+    uint16_t tx = 0, ty = 0;
+    while (true) {
+        if (TouchDriver::getTouch(&tx, &ty) && tx >= b.x && ty <= tapBottom) break;
+        delay(50);
+    }
+}
+
 // Dummy fatal error handler if duktape aborts
 static void my_fatal(void *udata, const char *msg) {
     String errStr = "\n================================================================================\n";
@@ -86,30 +131,17 @@ static void my_fatal(void *udata, const char *msg) {
     printToAllSerials(errStr);
     
     if (HarixKernel::tftInstance) {
-        HarixKernel::tftInstance->fillScreen(TFT_RED);
-        HarixKernel::tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-        HarixKernel::tftInstance->drawString("Out Of Ram Error", 10, 20, 4);
-        HarixKernel::tftInstance->drawString("Please turn off WiFi in", 10, 60, 2);
-        HarixKernel::tftInstance->drawString("setting to free the ram", 10, 80, 2);
-        HarixKernel::tftInstance->drawString("and make this app running", 10, 100, 2);
-        
+        drawOutOfRamPanel(HarixKernel::tftInstance);
+
         // Draw an 'X' to close/reboot
-        HarixKernel::tftInstance->fillRoundRect(200, 0, 40, 30, 5, TFT_WHITE);
-        HarixKernel::tftInstance->setTextColor(TFT_RED, TFT_WHITE);
-        HarixKernel::tftInstance->drawString("X", 215, 8, 2);
+        drawFatalExitButton(HarixKernel::tftInstance);
         // The X is the only way off this screen, and this runs inside the main loop that would
         // otherwise flush the frame -- so flush it here. On a canvas backend the button is otherwise
         // invisible, which makes a recoverable error look like a dead board.
         HarixKernel::tftInstance->present();
 
         // Wait for user to touch the X before rebooting!
-        uint16_t tx, ty;
-        while(true) {
-            if (TouchDriver::getTouch(&tx, &ty)) {
-                if (tx >= 200 && ty <= 40) break;
-            }
-            delay(50);
-        }
+        waitForFatalExitTap();
     }
     
     if (msg && strstr(msg, "alloc")) {
@@ -182,26 +214,13 @@ void HarixKernel::checkJSError(duk_context *ctx, duk_int_t result) {
             printToAllSerials(oomReport);
 
             if (tftInstance) {
-                tftInstance->fillScreen(TFT_RED);
-                tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-                tftInstance->drawString("Out Of Ram Error", 10, 20, 4);
-                tftInstance->drawString("Please turn off WiFi in", 10, 60, 2);
-                tftInstance->drawString("setting to free the ram", 10, 80, 2);
-                tftInstance->drawString("and make this app running", 10, 100, 2);
-                
+                drawOutOfRamPanel(tftInstance);
+
                 // Draw an 'X' to close
-                tftInstance->fillRoundRect(200, 0, 40, 30, 5, TFT_WHITE);
-                tftInstance->setTextColor(TFT_RED, TFT_WHITE);
-                tftInstance->drawString("X", 215, 8, 2);
+                drawFatalExitButton(tftInstance);
                 tftInstance->present(); // see my_fatal(): the X must be on the panel before we wait
 
-                uint16_t tx, ty;
-                while(true) {
-                    if (TouchDriver::getTouch(&tx, &ty)) {
-                        if (tx >= 200 && ty <= 40) break;
-                    }
-                    delay(50);
-                }
+                waitForFatalExitTap();
             }
             duk_pop(ctx);
             return;
@@ -230,47 +249,45 @@ void HarixKernel::checkJSError(duk_context *ctx, duk_int_t result) {
         printToAllSerials(report);
 
         if (tftInstance) {
+            const UiMetrics& m = UiLayout::current();
+            const int16_t   s = (int16_t)m.scale;
+            const int16_t   x = (int16_t)(10 * s);
+            const int16_t   pitch = (int16_t)(18 * s); // clears the 16px body glyph at this scale
+
             tftInstance->fillScreen(TFT_RED);
             tftInstance->setTextColor(TFT_WHITE, TFT_RED);
             tftInstance->setTextDatum(TL_DATUM);
-            tftInstance->drawString("JS EXCEPTION!", 10, 10, 4);
-            
-            int yPos = 40;
+            tftInstance->drawString("JS EXCEPTION!", x, (int16_t)(10 * s), 4);
+
+            int yPos = 40 * s;
             if (errName.length() > 0) {
-                tftInstance->drawString(errName + ":", 10, yPos, 2);
-                yPos += 18;
+                tftInstance->drawString(errName + ":", x, yPos, 2);
+                yPos += pitch;
             }
             if (fileName.length() > 0 || lineNumber > 0) {
                 String loc = (fileName.length() > 0 ? fileName : "app.js") + ":" + String(lineNumber);
-                tftInstance->drawString(loc, 10, yPos, 2);
-                yPos += 18;
+                tftInstance->drawString(loc, x, yPos, 2);
+                yPos += pitch;
             }
-            
-            // Draw lines of message / stack
+
+            // Draw lines of message / stack -- down to the footer, which is where the historical
+            // 290 landed on a 320-tall screen.
             String displayStr = (errMsg.length() > 0) ? errMsg : fullError;
             int startIdx = 0;
-            while (startIdx < displayStr.length() && yPos < 290) {
+            while (startIdx < displayStr.length() && yPos < m.footer.y) {
                 int nextNewline = displayStr.indexOf('\n', startIdx);
                 if (nextNewline == -1) nextNewline = displayStr.length();
                 String line = displayStr.substring(startIdx, nextNewline);
-                tftInstance->drawString(line, 10, yPos, 2);
-                yPos += 18;
+                tftInstance->drawString(line, x, yPos, 2);
+                yPos += pitch;
                 startIdx = nextNewline + 1;
             }
 
             // Draw an 'X' to close
-            tftInstance->fillRoundRect(200, 0, 40, 30, 5, TFT_WHITE);
-            tftInstance->setTextColor(TFT_RED, TFT_WHITE);
-            tftInstance->drawString("X", 215, 8, 2);
+            drawFatalExitButton(tftInstance);
             tftInstance->present(); // see my_fatal(): the X must be on the panel before we wait
 
-            uint16_t tx, ty;
-            while(true) {
-                if (TouchDriver::getTouch(&tx, &ty)) {
-                    if (tx >= 200 && ty <= 40) break;
-                }
-                delay(50);
-            }
+            waitForFatalExitTap();
         }
     }
     duk_pop(ctx); // pop result or error
@@ -386,26 +403,13 @@ void HarixKernel::runFile(const char* filePath) {
     if (!ctx) {
         printToAllSerials("Failed to create Duktape heap for app.\n");
         if (tftInstance) {
-            tftInstance->fillScreen(TFT_RED);
-            tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-            tftInstance->drawString("Out Of Ram Error", 10, 20, 4);
-            tftInstance->drawString("Please turn off WiFi in", 10, 60, 2);
-            tftInstance->drawString("setting to free the ram", 10, 80, 2);
-            tftInstance->drawString("and make this app running", 10, 100, 2);
-            
+            drawOutOfRamPanel(tftInstance);
+
             // Draw an 'X' to close
-            tftInstance->fillRoundRect(200, 0, 40, 30, 5, TFT_WHITE);
-            tftInstance->setTextColor(TFT_RED, TFT_WHITE);
-            tftInstance->drawString("X", 215, 8, 2);
+            drawFatalExitButton(tftInstance);
             tftInstance->present(); // see my_fatal(): the X must be on the panel before we wait
 
-            uint16_t tx, ty;
-            while(true) {
-                if (TouchDriver::getTouch(&tx, &ty)) {
-                    if (tx >= 200 && ty <= 40) break;
-                }
-                delay(50);
-            }
+            waitForFatalExitTap();
         }
         return; // Soft exit back to OS
     }

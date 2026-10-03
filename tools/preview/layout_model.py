@@ -52,62 +52,70 @@ def compute(w: int, h: int, kb: Dict = None) -> Dict:
     m: Dict = {"w": w, "h": h, "landscape": w > h}
     mind = min(w, h)
 
+    # The 240x320 layout scaled to this panel -- see uiScale() in UiLayout.h, which this mirrors.
+    # Every literal below that is a pixel dimension (as opposed to a proportion of w or h) is
+    # multiplied by s. At 240x320 s is 1 and this reproduces the historical numbers exactly.
+    s = max(1, min(3, mind // 240))
+    m["scale"] = s
+
     inset = mind // 80
     inset = max(2, min(8, inset))
     m["inset"] = inset
 
     m["frame"] = (inset, inset, w - 2 * inset, h - 2 * inset)
-    m["header"] = (inset + 3, inset + 3, w - 2 * (inset + 3), 30)
-    m["headerTextY"] = m["header"][1] + 15
+    m["header"] = (inset + 3, inset + 3, w - 2 * (inset + 3), 30 * s)
+    m["headerTextY"] = m["header"][1] + 15 * s
 
-    m["footer"] = (inset + 2, h - 35, w - 2 * (inset + 2), 30)
-    m["footerTextY"] = m["footer"][1] + 15
+    m["footer"] = (inset + 2, h - 35 * s, w - 2 * (inset + 2), 30 * s)
+    m["footerTextY"] = m["footer"][1] + 15 * s
 
-    list_h = m["footer"][1] - (inset + 42) - 10
+    list_h = m["footer"][1] - (inset + 42 * s) - 10 * s
     if list_h < 0:
         list_h = 0
-    m["list"] = (inset + 7, inset + 42, w - 2 * (inset + 7), list_h)
+    m["list"] = (inset + 7 * s, inset + 42 * s, w - 2 * (inset + 7 * s), list_h)
 
     # Row height is 30 on a normal panel; a short one shrinks toward a floor so at least ~4 rows fit.
-    m["rowH"] = 30
-    if list_h < 4 * 30:
-        m["rowH"] = max(14, list_h // 4)
-    m["rowFillH"] = m["rowH"] - 5
-    m["rowTextPadX"] = inset + 2
+    m["rowH"] = 30 * s
+    if list_h < 4 * m["rowH"]:
+        m["rowH"] = max(14 * s, list_h // 4)
+    m["rowFillH"] = m["rowH"] - 5 * s
+    m["rowTextPadX"] = inset + 2 * s
     ipp = list_h // m["rowH"] if m["rowH"] > 0 else 0
     m["itemsPerPage"] = max(1, ipp)
 
-    m["scrollX"] = w - 8
-    m["scrollW"] = 3
-    m["scrollThumbMin"] = 20
+    m["scrollX"] = w - 8 * s
+    m["scrollW"] = 3 * s
+    m["scrollThumbMin"] = 20 * s
 
     m["centerX"] = w // 2
     m["centerY"] = h // 2
 
-    m["appExitButton"] = (w - 40, 0, 40, 30)
-    m["progressBar"] = (w // 8, m["centerY"], w - w // 4, 20)
-    m["listMessageY"] = m["list"][1] + 55
+    m["appExitButton"] = (w - 40 * s, 0, 40 * s, 30 * s)
+    m["progressBar"] = (w // 8, m["centerY"], w - w // 4, 20 * s)
+    m["listMessageY"] = m["list"][1] + 55 * s
 
-    m["dialogButtonRowY"] = h - 90
+    m["dialogButtonRowY"] = h - 90 * s
     m["dialogButtonGap"] = w // 8
 
+    # Font ids are not scaled: only 1, 2 and 4 have glyph data. The rendered size is the backend's
+    # setTextSize, set from this same scale -- see uiScale().
     m["fontSmall"] = 1
     m["fontBody"] = 2 if h >= 200 else 1
     m["fontHeader"] = 4 if mind >= 300 else 2
 
-    m["cardX"] = 8
-    m["cardW"] = w - 16
-    m["cardH"] = 42 if h >= 240 else 30
-    m["cardR"] = 6
-    m["restingY"] = 8
-    m["hiddenY"] = -(m["cardH"] + 2)
+    m["cardX"] = 8 * s
+    m["cardW"] = w - 16 * s
+    m["cardH"] = (42 if h >= 240 else 30) * s
+    m["cardR"] = 6 * s
+    m["restingY"] = 8 * s
+    m["hiddenY"] = -(m["cardH"] + 2 * s)
     m["shadowW"] = w
-    m["shadowH"] = m["cardH"] + 22
+    m["shadowH"] = m["cardH"] + 22 * s
 
     # On-screen keyboard. The grid SHAPE is a board fact (see KB_SHAPE / KRYONOS_KB_* in UiLayout.h):
     # key width is fixed by the column count, so a board whose panel needs finger-sized keys declares
     # fewer columns and more rows. The chrome below is shared.
-    m["kbPromptX"] = 5
+    m["kbPromptX"] = 5 * s
     m["kbButtonCount"] = kb["buttons"]
     m["kbCols"] = kb["cols"]
     m["kbRows"] = kb["rows"]
@@ -116,20 +124,21 @@ def compute(w: int, h: int, kb: Dict = None) -> Dict:
     m["kbButtonW"] = w // m["kbButtonCount"]
 
     # A short panel compresses the chrome so the key grid keeps a usable height (see UiLayout.cpp).
+    # The threshold is a panel height, not a pixel dimension, so it is not scaled.
     if h < 240:
-        m["kbPromptY"] = 4
-        m["kbTextBox"] = (5, 20, w - 10, 20)
-        m["kbButtonRow"] = (0, 44, w, 24)
-        m["kbGridTop"] = 72
+        m["kbPromptY"] = 4 * s
+        m["kbTextBox"] = (5 * s, 20 * s, w - 10 * s, 20 * s)
+        m["kbButtonRow"] = (0, 44 * s, w, 24 * s)
+        m["kbGridTop"] = 72 * s
     else:
-        m["kbPromptY"] = 10
-        m["kbTextBox"] = (5, 30, w - 10, 30)
-        m["kbButtonRow"] = (0, 70, w, 30)
-        m["kbGridTop"] = 110
+        m["kbPromptY"] = 10 * s
+        m["kbTextBox"] = (5 * s, 30 * s, w - 10 * s, 30 * s)
+        m["kbButtonRow"] = (0, 70 * s, w, 30 * s)
+        m["kbGridTop"] = 110 * s
 
     # Paging: hold out for a legible key height rather than shrinking keys to nothing.
-    kb_min_key_h = 16 if m["fontBody"] >= 2 else 12
-    kb_pager_h = m["fontBody"] * 10 + 2
+    kb_min_key_h = (16 if m["fontBody"] >= 2 else 12) * s
+    kb_pager_h = (m["fontBody"] * 10 + 2) * s
     rows = (h - m["kbGridTop"]) // kb_min_key_h
     m["kbPagerH"] = 0
     if rows < m["kbRows"]:

@@ -186,13 +186,15 @@ void InstallerUI::scanSD() {
         
         if (fileCount > 0) {
             const UiMetrics& m = M();
-            const int16_t barX = (int16_t)(m.w / 8);
-            const int16_t barW = (int16_t)(m.w * 3 / 4);
+            const int16_t s = (int16_t)m.scale;
             tftInstance->fillScreen(TFT_BLACK);
             tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
             tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString("Loading App Details...", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
-            tftInstance->drawRect(barX, m.centerY, barW, 20, TFT_WHITE);
+            tftInstance->drawString("Loading App Details...", m.centerX,
+                                    (int16_t)(m.centerY - 20 * s), m.fontBody);
+            // The shared progress track, so the fill below lands inside the outline on any panel.
+            const UiRect bar = m.progressBar;
+            tftInstance->drawRect(bar.x, bar.y, bar.w, bar.h, TFT_WHITE);
             // The directory walk below reads every app.json, which on SD is slow enough to see; the
             // main loop is sitting inside this call. See MyKeyboard::getString().
             tftInstance->present();
@@ -201,11 +203,10 @@ void InstallerUI::scanSD() {
         // Check each directory for app.json
         for (int i = 0; i < fileCount; i++) {
             if (fileCount > 0) {
-                const UiMetrics& m = M();
-                const int16_t barX = (int16_t)(m.w / 8);
-                const int16_t barW = (int16_t)(m.w * 3 / 4);
-                int progressWidth = map(i, 0, fileCount, 0, barW - 4);
-                tftInstance->fillRect((int16_t)(barX + 2), (int16_t)(m.centerY + 2), progressWidth, 16, TFT_GREEN);
+                const UiRect bar = M().progressBar;
+                int progressWidth = map(i, 0, fileCount, 0, bar.w - 4);
+                tftInstance->fillRect((int16_t)(bar.x + 2), (int16_t)(bar.y + 2), progressWidth,
+                                      (int16_t)(bar.h - 4), TFT_GREEN);
             }
             
             isAppPackage[i] = false;
@@ -664,36 +665,43 @@ void InstallerUI::drawActionDialog() {
 static void installProgressCallback(int current, int total) {
     if (!progressTft) return;
 
+    // Every position here was a 240x320 literal -- the 180x20 bar, the panel's 200 height, the
+    // offsets that place the two readouts under it. They are all scaled from the metrics now, and
+    // the bar itself is the shared progress track rather than a fourth copy of its arithmetic.
     const UiMetrics& m = M();
-    const int barWidth = m.w * 3 / 4; // 180 at 240x320
-    const int barX = m.w / 8;         // 30 at 240x320
-    const int barY = m.centerY;       // 160 at 240x320
-    const int barH = 20;
+    const int16_t    s = (int16_t)m.scale;
+    const UiRect     bar = m.progressBar;
+    const UiRect     panel = m.dialogPanel((int16_t)(200 * s)); // (10,60,220,200) at scale 1
 
-    int fillWidth = (current * barWidth) / total;
+    int fillWidth = (current * bar.w) / total;
 
     // Draw progress bar outline (only first time)
     if (current == 1) {
-        progressTft->fillRoundRect(m.list.x, (int16_t)(m.list.y + 15), m.list.w, 200, 8, TFT_DARKGREY);
+        progressTft->fillRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_DARKGREY);
         progressTft->setTextColor(TFT_GREEN, TFT_DARKGREY);
         progressTft->setTextDatum(MC_DATUM);
-        progressTft->drawString("Installing...", m.centerX, (int16_t)(m.list.y + 55), 4);
-        progressTft->drawRoundRect(barX - 2, barY - 2, barWidth + 4, barH + 4, 3, TFT_WHITE);
+        progressTft->drawString("Installing...", m.centerX, (int16_t)(panel.y + 40 * s), 4);
+        progressTft->drawRoundRect((int16_t)(bar.x - 2 * s), (int16_t)(bar.y - 2 * s),
+                                   (int16_t)(bar.w + 4 * s), (int16_t)(bar.h + 4 * s),
+                                   (int32_t)(3 * s), TFT_WHITE);
     }
 
     // Fill progress bar
-    progressTft->fillRect(barX, barY, fillWidth, barH, TFT_GREEN);
+    progressTft->fillRect(bar.x, bar.y, fillWidth, bar.h, TFT_GREEN);
 
     // Draw percentage text
     int pct = (current * 100) / total;
-    progressTft->fillRect((int16_t)(m.centerX - 30), (int16_t)(m.centerY + 30), 60, 20, TFT_DARKGREY);
+    progressTft->fillRect((int16_t)(m.centerX - 30 * s), (int16_t)(m.centerY + 30 * s),
+                          (int16_t)(60 * s), (int16_t)(20 * s), TFT_DARKGREY);
     progressTft->setTextColor(TFT_WHITE, TFT_DARKGREY);
     progressTft->setTextDatum(MC_DATUM);
-    progressTft->drawString(String(pct) + "%", m.centerX, (int16_t)(m.centerY + 40), m.fontBody);
+    progressTft->drawString(String(pct) + "%", m.centerX, (int16_t)(m.centerY + 40 * s), m.fontBody);
 
     // Draw file count
-    progressTft->fillRect((int16_t)(m.centerX - 60), (int16_t)(m.centerY + 50), 120, 20, TFT_DARKGREY);
-    progressTft->drawString(String(current) + " / " + String(total) + " files", m.centerX, (int16_t)(m.centerY + 60), m.fontBody);
+    progressTft->fillRect((int16_t)(m.centerX - 60 * s), (int16_t)(m.centerY + 50 * s),
+                          (int16_t)(120 * s), (int16_t)(20 * s), TFT_DARKGREY);
+    progressTft->drawString(String(current) + " / " + String(total) + " files", m.centerX,
+                            (int16_t)(m.centerY + 60 * s), m.fontBody);
 
     // Flush each step. performInstall() copies and flashes between callbacks and does not return to
     // the main loop until the install is over, so nothing else presents this screen -- without this

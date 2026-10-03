@@ -11,7 +11,9 @@
 // This header is intentionally Arduino-free (only <stdint.h>) so the host-side preview tool
 // (tools/preview/layout_model.py mirrors these formulas) and any native simulator can use it.
 //
-// GUARANTEE: compute(240, 320) reproduces the historical constants exactly
+// GUARANTEE: compute(240, 320) reproduces the historical constants exactly -- the scale below is 1
+// there, so every multiplied constant is unchanged and the whole layout is bit-identical. A larger
+// panel scales it; see uiScale().
 //   frame (3,3,234,314) · header (6,6,228,30) · list (10,45,220,230) · footer (5,285,230,30)
 //   center (120,160) · rowH 30 · rowFillH 25 · rowTextPadX 5 · listRowTextY row.y+12
 //   itemsPerPage 7 · scrollbar x 232 · app-exit (200,0,40,30)
@@ -58,6 +60,29 @@
 #define KRYONOS_KB_CHAR_PAGES 1
 #endif
 
+// ---------------------------------------------------------------------------------------------
+// UI scale.
+//
+// The constants in compute() are the 240x320 layout. They were all fixed pixels, which meant a
+// larger panel rendered 240x320 furniture in the middle of it: a 30px header, 30px rows and 16px
+// text on the Korvo-1's 800x480 panel, where the text is unreadable at arm's length and a 30px
+// button is not a touch target. `scale` is how many times that reference furniture fits inside the
+// panel, and compute() multiplies its fixed constants by it.
+//
+// It is 1 on every board that predates the Korvo-1 -- esp32 and esp32s3 declare 240x320, and the
+// Waveshare's canvas is 240x320 too (its 480x480 panel is addressed through the round-aperture
+// upscale in EspLcdRgbDisplay, not through a bigger canvas). 240x135 resolves to 0 and clamps to 1.
+// So their layouts are bit-identical to before; only a genuinely larger canvas changes anything.
+//
+// Text is scaled separately, by the backend's setTextSize (TFT_eSPI's `textsize`), because only
+// font ids 1, 2 and 4 have data. The two must agree, so this is the one place the number is
+// derived.
+// ---------------------------------------------------------------------------------------------
+inline int16_t uiScale(int16_t w, int16_t h) {
+    const int16_t s = ((w < h) ? w : h) / 240;
+    return (s < 1) ? 1 : ((s > 3) ? 3 : s);
+}
+
 struct UiRect {
     int16_t x, y, w, h;
 
@@ -83,6 +108,7 @@ struct UiMetrics {
     int16_t w, h;
     bool    landscape;
     uint8_t inset;
+    uint8_t scale;  // see uiScale() above; 1 is the 240x320 reference layout
 
     UiRect  frame;
     UiRect  header;

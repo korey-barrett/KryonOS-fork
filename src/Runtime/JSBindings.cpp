@@ -11,6 +11,7 @@
 #include "../Kernel/WiFiManager.h"
 #include "../Settings/TouchDriver.h"
 #include "../Hal/Display/Display.h"
+#include "../UI/UiLayout.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Keyboard/MyKeyboard.h"
 #include "../WebManager/WebManager.h"
@@ -1413,6 +1414,12 @@ duk_ret_t JSBindings::js_drawString(duk_context *ctx) {
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
     int font = duk_get_int_default(ctx, 3, 2); // default to font 2
+    // Only ids 1, 2 and 4 are vendored (see KryonText.h): any other id renders nothing AND measures
+    // zero, so an app asking for one silently loses its text instead of failing loudly. Snap an
+    // unsupported id to the nearest supported size -- 8 / 16 / 32 px.
+    if      (font <= 1) font = 1;
+    else if (font == 3) font = 2;
+    else if (font >= 4) font = 4;
     tftInstance->setTextDatum(TL_DATUM);
     TFT_eSprite* sp = getActiveSprite();
     if (sp) {
@@ -1452,7 +1459,11 @@ duk_ret_t JSBindings::js_setTextColor(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_setTextSize(duk_context *ctx) {
     if (!tftInstance) return 0;
+    // The setter takes a uint8_t, so a negative size would wrap to ~255 and try to draw glyphs of
+    // thousands of pixels. Clamp to the range a text size can sensibly be.
     int size = duk_require_int(ctx, 0);
+    if (size < 1) size = 1;
+    if (size > 8) size = 8;
     TFT_eSprite* sp = getActiveSprite();
     if (sp) sp->setTextSize(size);
     else {
@@ -1502,9 +1513,13 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
     bool touched = false;
     if (tftInstance) {
         touched = TouchDriver::getTouch(&tx, &ty);
-        
-        // Hidden OS Exit Button (Top Right Corner)
-        if (touched && tx >= 200 && ty <= 40) {
+
+        // Hidden OS Exit Button (Top Right Corner). Same rectangle the app draws with, from
+        // UiLayout, plus the strip below it the historical `tx >= 200 && ty <= 40` also swallowed --
+        // the two were spelled out in different files and would otherwise part company on a scaled
+        // panel, leaving the user tapping a visible button that does nothing.
+        const UiRect& exitBtn = UiLayout::current().appExitButton;
+        if (touched && tx >= exitBtn.x && ty <= exitBtn.y + exitBtn.h + 10 * UiLayout::current().scale) {
             duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
             return 0; // Unreachable, but good practice
         }
@@ -1758,33 +1773,46 @@ duk_ret_t JSBindings::js_getAPILevel(duk_context *ctx) {
 
 void JSBindings::showWiFiAlertModal() {
     if (!tftInstance) return;
-    
-    tftInstance->fillRoundRect(20, 70, 200, 180, 8, TFT_BLACK);
-    tftInstance->drawRoundRect(20, 70, 200, 180, 8, TFT_RED);
-    
+
+    // Was a 240x320 panel spelled out coordinate by coordinate -- and its OK hit box (60..180 x
+    // 185..240) spelled out again, larger than the button it was meant to be (70..170 x 195..231).
+    // Both come from the metrics now, so the modal scales with the panel and the tap zone IS the
+    // button. The offsets inside the panel keep the historical spacing: 18px down to the header
+    // label, 55 to the first body line, 125 to the button.
+    const UiMetrics& m = UiLayout::current();
+    const int16_t    s = (int16_t)m.scale;
+
+    const UiRect panel = m.dialogPanel((int16_t)(180 * s));
+    tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_BLACK);
+    tftInstance->drawRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_RED);
+
     // Header
-    tftInstance->fillRoundRect(22, 72, 196, 32, 6, TFT_RED);
+    tftInstance->fillRoundRect((int16_t)(panel.x + 2 * s), (int16_t)(panel.y + 2 * s),
+                               (int16_t)(panel.w - 4 * s), (int16_t)(32 * s),
+                               (int32_t)(6 * s), TFT_RED);
     tftInstance->setTextColor(TFT_WHITE, TFT_RED);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("WiFi Not Connected", 120, 88, 2);
-    
+    tftInstance->drawString("WiFi Not Connected", panel.cx(), (int16_t)(panel.y + 18 * s), 2);
+
     // Body
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Please turn on WiFi", 120, 125, 2);
-    tftInstance->drawString("in Settings to connect", 120, 145, 2);
-    tftInstance->drawString("to the internet.", 120, 165, 2);
-    
+    tftInstance->drawString("Please turn on WiFi", panel.cx(), (int16_t)(panel.y + 55 * s), 2);
+    tftInstance->drawString("in Settings to connect", panel.cx(), (int16_t)(panel.y + 75 * s), 2);
+    tftInstance->drawString("to the internet.", panel.cx(), (int16_t)(panel.y + 95 * s), 2);
+
     // OK button
-    tftInstance->fillRoundRect(70, 195, 100, 36, 6, TFT_BLUE);
+    const UiRect ok = m.dialogButton((int16_t)(panel.y + 125 * s), (int16_t)(36 * s), 0, 1,
+                                     (int16_t)(100 * s));
+    tftInstance->fillRoundRect(ok.x, ok.y, ok.w, ok.h, (int32_t)(6 * s), TFT_BLUE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
-    tftInstance->drawString("OK", 120, 213, 2);
+    tftInstance->drawString("OK", ok.cx(), ok.cy(), 2);
     tftInstance->present(); // see promptStoragePermission(): the modal blocks, so it flushes itself
-    
+
     unsigned long startModal = millis();
     uint16_t tx = 0, ty = 0;
     while (millis() - startModal < 3000) {
         if (TouchDriver::getTouch(&tx, &ty)) {
-            if (tx >= 60 && tx <= 180 && ty >= 185 && ty <= 240) {
+            if (ok.contains((int16_t)tx, (int16_t)ty)) {
                 while (TouchDriver::getTouch(&tx, &ty)) { delay(10); }
                 break;
             }
@@ -2483,16 +2511,46 @@ static bool promptStoragePermission(const String& pkg, const String& targetPath)
     KryonDisplay* tft = JSBindings::getTFT();
     if (!tft) return false;
 
-    // Draw native modal dialog (centered 220x210 box)
-    tft->fillRoundRect(10, 35, 220, 220, 8, TFT_DARKGREY);
-    tft->drawRoundRect(10, 35, 220, 220, 8, TFT_WHITE);
+    // A native modal: three text rows, then three stacked buttons. It used to spell out its 240x320
+    // panel, its three buttons AND its three hit boxes -- six copies of the same arithmetic, which on
+    // a scaled panel would have left both the panel and the tap zones behind the screen. All of it
+    // comes from the metrics now, and the tap zone for each button IS that button.
+    const UiMetrics& m = UiLayout::current();
+    const int16_t    s = (int16_t)m.scale;
+
+    const int16_t gap    = (int16_t)(8 * s);   // between stacked buttons
+    const int16_t margin = (int16_t)(18 * s);  // below the last one
+    const int16_t padX   = (int16_t)(10 * s);  // from the panel edge to a button
+    int16_t       btnH   = (int16_t)(32 * s);
+    int16_t       headH  = (int16_t)(90 * s); // panel top down to the first button: three text rows
+    const int16_t avail  = (int16_t)(m.footer.y - 15 - (m.header.bottom() + 4));
+
+    // At scale 1 this is the historical 220 and the fit test below never fires. A scaled panel has
+    // less room than a doubled layout wants, so the text block gives back its slack first -- it was
+    // drawn with a 16px font and 90px of headroom -- and only then do the buttons shrink, since they
+    // are the touch target and the reason this dialog exists.
+    if (headH + 3 * btnH + 2 * gap + margin > avail) {
+        headH -= (int16_t)(headH + 3 * btnH + 2 * gap + margin - avail);
+        const int16_t headMin = (int16_t)(72 * s); // rows at 15/35/55 plus their glyph height
+        if (headH < headMin) headH = headMin;
+        const int16_t room = (int16_t)(avail - headH - 2 * gap - margin);
+        if (3 * btnH > room) {
+            btnH = (int16_t)(room / 3);
+            const int16_t btnMin = (int16_t)(20 * s);
+            if (btnH < btnMin) btnH = btnMin;
+        }
+    }
+
+    const UiRect panel = m.dialogPanelTop((int16_t)(headH + 3 * btnH + 2 * gap + margin));
+    tft->fillRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_DARKGREY);
+    tft->drawRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_WHITE);
 
     tft->setTextDatum(MC_DATUM);
     tft->setTextColor(TFT_GOLD, TFT_DARKGREY);
-    tft->drawString("Storage Permission", 120, 55, 2);
+    tft->drawString("Storage Permission", panel.cx(), (int16_t)(panel.y + 15 * s), 2);
 
     tft->setTextColor(TFT_WHITE, TFT_DARKGREY);
-    tft->drawString("App requests external access:", 120, 80, 2);
+    tft->drawString("App requests external access:", panel.cx(), (int16_t)(panel.y + 35 * s), 2);
 
     // Target path snippet
     String displayPath = targetPath;
@@ -2500,23 +2558,30 @@ static bool promptStoragePermission(const String& pkg, const String& targetPath)
         displayPath = displayPath.substring(0, 19) + "...";
     }
     tft->setTextColor(TFT_CYAN, TFT_DARKGREY);
-    tft->drawString(displayPath, 120, 102, 2);
+    tft->drawString(displayPath, panel.cx(), (int16_t)(panel.y + 55 * s), 2);
 
-    // Buttons
+    // Buttons, top to bottom: Allow Once, Always Allow, Deny.
+    const int16_t btnX = (int16_t)(panel.x + padX);
+    const int16_t btnW = (int16_t)(panel.w - 2 * padX);
+    UiRect btn[3];
+    for (int i = 0; i < 3; i++) {
+        btn[i] = { btnX, (int16_t)(panel.y + headH + i * (btnH + gap)), btnW, btnH };
+    }
+
     // 1. Allow Once (Session)
-    tft->fillRoundRect(20, 125, 200, 32, 4, TFT_BLUE);
+    tft->fillRoundRect(btn[0].x, btn[0].y, btn[0].w, btn[0].h, (int32_t)(4 * s), TFT_BLUE);
     tft->setTextColor(TFT_WHITE, TFT_BLUE);
-    tft->drawString("Allow Once", 120, 141, 2);
+    tft->drawString("Allow Once", btn[0].cx(), btn[0].cy(), 2);
 
     // 2. Always Allow (Persisted)
-    tft->fillRoundRect(20, 165, 200, 32, 4, TFT_GREEN);
+    tft->fillRoundRect(btn[1].x, btn[1].y, btn[1].w, btn[1].h, (int32_t)(4 * s), TFT_GREEN);
     tft->setTextColor(TFT_BLACK, TFT_GREEN);
-    tft->drawString("Always Allow", 120, 181, 2);
+    tft->drawString("Always Allow", btn[1].cx(), btn[1].cy(), 2);
 
     // 3. Deny
-    tft->fillRoundRect(20, 205, 200, 32, 4, TFT_RED);
+    tft->fillRoundRect(btn[2].x, btn[2].y, btn[2].w, btn[2].h, (int32_t)(4 * s), TFT_RED);
     tft->setTextColor(TFT_WHITE, TFT_RED);
-    tft->drawString("Deny", 120, 221, 2);
+    tft->drawString("Deny", btn[2].cx(), btn[2].cy(), 2);
     // Flush before waiting: this modal blocks, so the main loop's per-iteration present() cannot run
     // and the three buttons would never reach a canvas backend (the S31, the Waveshare).
     tft->present();
@@ -2525,23 +2590,13 @@ static bool promptStoragePermission(const String& pkg, const String& targetPath)
     uint16_t tx = 0, ty = 0;
     while (true) {
         if (TouchDriver::getTouch(&tx, &ty)) {
-            // Button 1: Allow Once (y: 125-157)
-            if (tx >= 20 && tx <= 220 && ty >= 125 && ty <= 157) {
+            for (int i = 0; i < 3; i++) {
+                if (!btn[i].contains((int16_t)tx, (int16_t)ty)) continue;
                 while (TouchDriver::getTouch(&tx, &ty)) { delay(10); esp_task_wdt_reset(); }
+                if (i == 2) return false;               // Deny
                 grantSessionStorage(pkg);
+                if (i == 1) persistStoragePermission(pkg); // Always Allow: also persist
                 return true;
-            }
-            // Button 2: Always Allow (y: 165-197)
-            else if (tx >= 20 && tx <= 220 && ty >= 165 && ty <= 197) {
-                while (TouchDriver::getTouch(&tx, &ty)) { delay(10); esp_task_wdt_reset(); }
-                grantSessionStorage(pkg);
-                persistStoragePermission(pkg);
-                return true;
-            }
-            // Button 3: Deny (y: 205-237)
-            else if (tx >= 20 && tx <= 220 && ty >= 205 && ty <= 237) {
-                while (TouchDriver::getTouch(&tx, &ty)) { delay(10); esp_task_wdt_reset(); }
-                return false;
             }
         }
         delay(20);

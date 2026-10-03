@@ -15,6 +15,8 @@
 
 #include "bsp/display.h"
 
+#include "UI/UiLayout.h" // uiScale(), so text is sized from the same number the layout is
+
 // =================================================================================================
 // Lifecycle
 // =================================================================================================
@@ -71,6 +73,15 @@ void KorvoRgbDisplay::init(uint8_t tc) {
     }
     canvasReady_ = true;
 
+    // Text scale. The canvas's own default is 1, which on this 800x480 panel renders the fonts at
+    // their 240x320 size: 16px body text on a screen with three times the reference area, which is
+    // both hard to read and too small to sit in the scaled-up rows and keys UiLayout now hands out.
+    // setTextSize is TFT_eSPI's `textsize`, and KryonSprite feeds it into the draw path, the measure
+    // path and the datum switch together -- so every screen that measures its text to lay out stays
+    // correct, and no call site needs touching. js_setTextSize can still override it per app.
+    const uint8_t textScale = static_cast<uint8_t>(uiScale(nativeW_, nativeH_));
+    canvas_.setTextSize(textScale);
+
     // Black before the first real frame. The driver zeroed the frame buffer with calloc and flushed
     // it, so this is belt-and-braces rather than the only thing standing between the panel and
     // uninitialised PSRAM -- but it is also the first exercise of the flush in present(), so it is
@@ -88,8 +99,9 @@ void KorvoRgbDisplay::init(uint8_t tc) {
     // bring-up sequence identical to every other backend, and the result is logged rather than
     // checked -- a "failure" here would be a false alarm.
     const esp_err_t blErr = bsp_display_backlight_on();
-    Serial.printf("[Display:korvo] ready: canvas is the panel frame buffer, %dx%d, backlight %s (%s)\n",
-                  static_cast<int>(w_), static_cast<int>(h_),
+    Serial.printf("[Display:korvo] ready: canvas is the panel frame buffer, %dx%d, UI scale %u, "
+                  "backlight %s (%s)\n",
+                  static_cast<int>(w_), static_cast<int>(h_), static_cast<unsigned>(textScale),
                   blErr == ESP_OK ? "on" : "always-on (no control)",
                   esp_err_to_name(blErr));
 }

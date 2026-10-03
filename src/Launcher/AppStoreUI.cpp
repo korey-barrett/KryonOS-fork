@@ -189,10 +189,14 @@ bool AppStoreUI::downloadFile(const String& url, const String& destPath, const S
                     file.write(buff, readLen);
                     downloaded += readLen;
                     
-                    // Update Progress Bar
+                    // Update Progress Bar. These were the 240x320 track's insets written out again --
+                    // (30,160,180,20) inset by 2 -- so they now come from the same rectangle the
+                    // outline above was drawn with, and stay inside it on any panel size.
                     if (totalLen > 0) {
-                        int progressWidth = map(downloaded, 0, totalLen, 0, 176);
-                        tftInstance->fillRect(32, 162, progressWidth, 16, TFT_GREEN);
+                        const int innerW = m.progressBar.w - 4;
+                        int progressWidth = map(downloaded, 0, totalLen, 0, innerW);
+                        tftInstance->fillRect(m.progressBar.x + 2, m.progressBar.y + 2, progressWidth,
+                                              m.progressBar.h - 4, TFT_GREEN);
                         tftInstance->present(); // or the bar never moves -- nothing else runs during the transfer
                     }
                 }
