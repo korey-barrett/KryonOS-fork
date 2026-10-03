@@ -2617,9 +2617,14 @@ void SettingsUI::handleUpdaterTouch(uint16_t x, uint16_t y) {
             otaErrorShown = false;
             const OTAUpdateInfo& info = OTAManager::getUpdateInfo();
             drawOTAProgress(0, 0, info.firmwareSize, 0, "Reconnecting...");
+            // Release the SD volume for the update: see the note on FileSystem::suspendSD(). The
+            // call below blocks for the whole download, and returns only if it failed -- success
+            // restarts the chip from inside it -- so the remount sits on the failure path.
+            FileSystem::suspendSD();
             bool success = OTAManager::startFlashUpdate([](const OTAProgress& p) {
                 SettingsUI::drawOTAProgress(p.percent, p.downloadedBytes, p.totalBytes, p.speedKBs, p.statusMessage);
             });
+            FileSystem::resumeSD();
             if (!success) {
                 const OTAProgress& prog = OTAManager::getProgress();
                 drawOTAError(prog.errorMessage);
@@ -2640,9 +2645,12 @@ void SettingsUI::handleUpdaterTouch(uint16_t x, uint16_t y) {
     // 1. "INSTALL UPDATE" Button (only if supports_ota is true)
     if (info.hasUpdate && info.supportsOta && install.contains((int16_t)x, (int16_t)y)) {
         drawOTAProgress(0, 0, info.firmwareSize, 0, "Initializing Flash Stream...");
+        // Same release as the retry path above, and for the same reason.
+        FileSystem::suspendSD();
         bool success = OTAManager::startFlashUpdate([](const OTAProgress& p) {
             SettingsUI::drawOTAProgress(p.percent, p.downloadedBytes, p.totalBytes, p.speedKBs, p.statusMessage);
         });
+        FileSystem::resumeSD();
         if (!success) {
             const OTAProgress& prog = OTAManager::getProgress();
             drawOTAError(prog.errorMessage);
