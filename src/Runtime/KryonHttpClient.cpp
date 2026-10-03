@@ -124,7 +124,7 @@ bool KryonHttpClient::downloadFile(const String& url, const String& destPath,
             http.end();
             return false;
         }
-        targetFS = &SD;
+        targetFS = FileSystem::sdVolume();
         relPath = destPath.substring(3);
     } else if (destPath.startsWith("/local/")) {
         targetFS = &LittleFS;
@@ -135,7 +135,7 @@ bool KryonHttpClient::downloadFile(const String& url, const String& destPath,
     int lastSlash = relPath.lastIndexOf('/');
     if (lastSlash > 0) {
         String parentDir = relPath.substring(0, lastSlash);
-        String fullParent = (targetFS == &SD) ? ("/sd" + parentDir) : ("/local" + parentDir);
+        String fullParent = (targetFS == FileSystem::sdVolume()) ? ("/sd" + parentDir) : ("/local" + parentDir);
         FileSystem::mkdir(fullParent.c_str());
     }
 

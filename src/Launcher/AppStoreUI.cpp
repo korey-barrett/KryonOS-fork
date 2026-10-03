@@ -154,7 +154,7 @@ bool AppStoreUI::downloadFile(const String& url, const String& destPath, const S
         fs::FS* targetFS = &LittleFS;
         String relPath = destPath;
         if (destPath.startsWith("/sd/")) {
-            targetFS = &SD;
+            targetFS = FileSystem::sdVolume();
             relPath = destPath.substring(3);
         } else if (destPath.startsWith("/local/")) {
             targetFS = &LittleFS;
@@ -343,7 +343,7 @@ bool AppStoreUI::checkUpdates() {
     
     for (int i=0; i<2; i++) {
         if (i == 0 && !FileSystem::isSDMounted()) continue;
-        fs::FS* targetFS = (i == 0) ? (fs::FS*)&SD : (fs::FS*)&LittleFS;
+        fs::FS* targetFS = (i == 0) ? FileSystem::sdVolume() : (fs::FS*)&LittleFS;
         if (!targetFS->exists("/apps")) continue;
         
         File root = targetFS->open("/apps");

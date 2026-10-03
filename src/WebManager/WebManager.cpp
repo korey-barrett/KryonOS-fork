@@ -1028,7 +1028,7 @@ static fs::FS* getFSFromPath(String& path) {
         if (!FileSystem::isSDMounted()) return nullptr;
         path = path.substring(3);
         if (path == "") path = "/";
-        return &SD;
+        return FileSystem::sdVolume();
     } else if (path.startsWith("/littlefs") || path.startsWith("/local")) {
         if (path.startsWith("/littlefs")) {
             path = path.substring(9);

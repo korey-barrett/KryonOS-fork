@@ -57,6 +57,13 @@ public:
     
     // Mounting/Formatting
     static bool isSDMounted();
+
+    // The filesystem an "/sd/..." path must be opened on: the SPI `SD` object on most boards, but
+    // SD_MMC on a board whose slot is SDMMC (the Waveshare 2.1B). Code that hardcodes `&SD` there
+    // opens an empty, never-mounted filesystem, so those paths appear to succeed and go nowhere.
+    // Falls back to `&SD` when nothing is mounted, which fails to open exactly as a literal `&SD`
+    // would -- so a caller that does not check isSDMounted() first still cannot null-deref.
+    static fs::FS* sdVolume();
     static bool mountSD();
     static void unmountSD();
     static bool formatSD();

@@ -1282,7 +1282,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
     fs::FS* targetFS = nullptr;
     String relPath = "";
     if (strncmp(path, "/sd", 3) == 0) {
-        targetFS = &SD;
+        targetFS = FileSystem::sdVolume();
         relPath = String(path).substring(3);
         if (!relPath.startsWith("/")) relPath = "/" + relPath;
     } else if (strncmp(path, "/local", 6) == 0) {

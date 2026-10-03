@@ -2,11 +2,41 @@
 #include "Hal/Boards/Board.h"
 #include <mbedtls/md5.h>
 
+// These boards' cards are on SD_MMC, not the SPI `SD` class the shared code below names. Their
+// BoardConfig.cpp files are separate translation units, so the object has to be declared here too.
+#if defined(TARGET_WAVESHARE_S3_LCD21B) || defined(TARGET_ESP32S31_KORVO1)
+#include <SD_MMC.h>
+#endif
+
 static SPIClass *sdSPI = nullptr;
 static bool sdMounted = false;
 
+// The filesystem the card is ACTUALLY mounted on, and what every "/sd/..." path must address.
+// On the remaining boards that is the SPI `SD` object; the Waveshare's slot is SDMMC 1-bit and the
+// Korvo-1's is SDMMC 4-bit, so on both of those it is SD_MMC. Routing paths through a literal `SD`
+// would silently address an unmounted filesystem -- writes would appear to succeed and go nowhere.
+static fs::FS *sdFS = nullptr;
+
+// Capacity and unmount are not on fs::FS: that class exposes only the operations a filesystem can
+// be asked generically (open, exists, remove, rename, mkdir, rmdir), while totalBytes/usedBytes/end
+// live on the concrete fs::SDFS and fs::SDMMCFS classes, which share no base beyond it. So sdFS
+// routes paths and these three route the volume.
+#if defined(TARGET_WAVESHARE_S3_LCD21B) || defined(TARGET_ESP32S31_KORVO1)
+static inline uint64_t sdTotalBytes() { return SD_MMC.totalBytes(); }
+static inline uint64_t sdUsedBytes()  { return SD_MMC.usedBytes(); }
+static inline void     sdEnd()        { SD_MMC.end(); }
+#else
+static inline uint64_t sdTotalBytes() { return SD.totalBytes(); }
+static inline uint64_t sdUsedBytes()  { return SD.usedBytes(); }
+static inline void     sdEnd()        { SD.end(); }
+#endif
+
 bool FileSystem::isSDMounted() {
     return sdMounted;
+}
+
+fs::FS* FileSystem::sdVolume() {
+    return sdFS ? sdFS : static_cast<fs::FS*>(&SD);
 }
 
 // Resolves a virtual path like "/local/apps/foo" or "/sd/data" into a
@@ -18,7 +48,7 @@ static fs::FS* getTargetFS(const char* path, String& relPath) {
     if (strncmp(path, "/sd", 3) == 0 && (path[3] == '/' || path[3] == '\0')) {
         if (!sdMounted) return nullptr;
         relPath = (path[3] == '\0') ? "/" : (path + 3);
-        targetFS = &SD;
+        targetFS = sdFS;
     } else if (strncmp(path, "/local", 6) == 0 && (path[6] == '/' || path[6] == '\0')) {
         relPath = (path[6] == '\0') ? "/" : (path + 6);
         targetFS = &LittleFS;
@@ -143,9 +173,17 @@ bool FileSystem::init() {
     sdMounted = (initSD() != nullptr);
 #elif defined(TARGET_WAVESHARE_S3_LCD21B)
     // MUST NOT fall into the #else below: that map drives GPIO15, which on this board is the I2C
-    // SDA line shared by the TCA9554 expander and the touch controller. Its SD slot is on SPI and
-    // shares GPIO1/GPIO2 with the panel's 3-wire command bus, so mounting belongs after display
-    // init -- delegate to the board layer, which currently reports "no card".
+    // SDA line shared by the TCA9554 expander and the touch controller. This board's slot is SDMMC
+    // 1-bit and shares GPIO1/GPIO2 with the panel's 3-wire command bus, so mounting belongs after
+    // display init -- which is where this call sits, several steps after Display::begin(). Delegate
+    // to the board layer, which owns those pins.
+    sdMounted = (initSD() != nullptr);
+#elif defined(TARGET_ESP32S31_KORVO1)
+    // Same trap as the Waveshare line above, for the same reason and one more: the #else map would
+    // drive GPIO15, and on this board that is the I2C line the BSP's touch controller sits on --
+    // so falling through would not merely fail to find a card, it would talk over the touch bus.
+    // The slot is 4-bit SDMMC on the BSP's own pins (CLK 24, CMD 25, D0-D3 20-23) behind an enable
+    // line on GPIO39, none of which the generic map knows about. The board layer owns all of it.
     sdMounted = (initSD() != nullptr);
 #else
     pinMode(15, OUTPUT);
@@ -161,6 +199,14 @@ bool FileSystem::init() {
         sdMounted = false;
         Serial.println("SD Card Mount Failed");
     }
+#endif
+
+    // The volume "/sd/..." paths address. Set once here rather than in each arm above, so an arm
+    // that grows a new failure path cannot forget it.
+#if defined(TARGET_WAVESHARE_S3_LCD21B) || defined(TARGET_ESP32S31_KORVO1)
+    sdFS = sdMounted ? static_cast<fs::FS*>(&SD_MMC) : nullptr;
+#else
+    sdFS = sdMounted ? static_cast<fs::FS*>(&SD) : nullptr;
 #endif
 
     return success;
@@ -572,13 +618,13 @@ time_t FileSystem::getLastModified(const char* path) {
 }
 
 size_t FileSystem::getTotalSpace(const char* drive) {
-    if (strncmp(drive, "/sd", 3) == 0) return sdMounted ? SD.totalBytes() : 0;
+    if (strncmp(drive, "/sd", 3) == 0) return sdMounted ? sdTotalBytes() : 0;
     if (strncmp(drive, "/local", 6) == 0) return LittleFS.totalBytes();
     return 0;
 }
 
 size_t FileSystem::getUsedSpace(const char* drive) {
-    if (strncmp(drive, "/sd", 3) == 0) return sdMounted ? SD.usedBytes() : 0;
+    if (strncmp(drive, "/sd", 3) == 0) return sdMounted ? sdUsedBytes() : 0;
     if (strncmp(drive, "/local", 6) == 0) return LittleFS.usedBytes();
     return 0;
 }
@@ -647,9 +693,11 @@ bool FileSystem::mountSD() {
                  SD.begin(42, *sdSPI, 400000, "/sd", 5, false));
 #elif defined(TARGET_CYD)
     sdMounted = (initSD() != nullptr);
-#elif defined(TARGET_WAVESHARE_S3_LCD21B)
-    // See the note in the first SD branch: the generic map below drives GPIO15, which is this
-    // board's I2C SDA. Delegate to the board layer instead.
+#elif defined(TARGET_WAVESHARE_S3_LCD21B) || defined(TARGET_ESP32S31_KORVO1)
+    // See the note in the first SD branch: the generic map below drives GPIO15, which is the
+    // Waveshare's I2C SDA and the Korvo-1's touch bus. Delegate to the board layer instead -- which
+    // also matters on the Korvo-1 for a second reason: its slot is 4-bit SDMMC behind an enable line
+    // on GPIO39, and no part of the SPI map below applies to it.
     sdMounted = (initSD() != nullptr);
 #else
     if (!sdSPI) return false;
@@ -658,11 +706,20 @@ bool FileSystem::mountSD() {
     pinMode(26, INPUT_PULLUP);
     sdMounted = (SD.begin(15, *sdSPI, 4000000) || SD.begin(15, *sdSPI, 1000000));
 #endif
+
+    // Same as init(): the volume "/sd/..." paths address, set here so every arm above is covered.
+#if defined(TARGET_WAVESHARE_S3_LCD21B) || defined(TARGET_ESP32S31_KORVO1)
+    sdFS = sdMounted ? static_cast<fs::FS*>(&SD_MMC) : nullptr;
+#else
+    sdFS = sdMounted ? static_cast<fs::FS*>(&SD) : nullptr;
+#endif
+
     return sdMounted;
 }
 
 void FileSystem::unmountSD() {
-    SD.end();
+    if (sdFS) sdEnd();
+    sdFS = nullptr;
     sdMounted = false;
 }
 
