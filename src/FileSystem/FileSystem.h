@@ -67,6 +67,17 @@ public:
     static bool mountSD();
     static void unmountSD();
     static bool formatSD();
+
+    // Drops the SD volume for the duration of an in-place flash update and puts it back afterwards.
+    // A mounted FATFS volume is not free: the VFS entry, the FATFS object and the card's file
+    // allocations all come out of the same internal heap the updater needs. Arduino's
+    // UpdateClass::begin() allocates its 4096-byte sector buffer at a point where the download's
+    // TLS session is already up, and reports a failed allocation as "Err #0" -- that path leaves
+    // _error at UPDATE_ERROR_OK, so the message names no cause. Without the card mounted that
+    // allocation succeeds; with it mounted it does not. The volume is not needed while flash is
+    // being written, so it is released rather than left to compete for the heap.
+    static void suspendSD();
+    static void resumeSD();
 };
 
 #endif // FILE_SYSTEM_H

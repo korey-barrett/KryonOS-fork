@@ -9,6 +9,13 @@ All board-specific pinouts, bus initializations, display controllers, and input 
 > selection chain (build flags → `TARGET_*` macro → the global `tft` symbol → touch driver), the
 > `KRYONOS_DISPLAY_*` resolution/rotation contract, and the new-board recipe.
 
+> **About to reflash a board that is already set up?** Read
+> [Flash Layout, Reflashing, and What Survives](Flash_and_Persistence.md) first. Two things cost you
+> the settings on the device, and neither is a normal upload: writing a factory image at offset `0x0`
+> (which covers the `nvs` partition at `0x9000` and takes the KryonCloud `deviceId` with it), and
+> changing `board_build.partitions` (which moves the filesystem and formats it). That page gives the
+> offsets per board and lists exactly what has to be re-entered after each case.
+
 ---
 
 ## 1. Supported Board Targets
