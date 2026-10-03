@@ -131,7 +131,8 @@ void MyKeyboard::drawKeyboard(String currentText, String promptMsg, bool caps, i
     // Text box
     tftInstance->drawRect(m.kbTextBox.x, m.kbTextBox.y, m.kbTextBox.w, m.kbTextBox.h, TFT_GREEN);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString(currentText + "_", m.kbTextBox.x + 5, m.kbTextBox.y + 8, m.fontBody);
+    tftInstance->drawString(currentText + "_", (int16_t)(m.kbTextBox.x + 5 * m.scale),
+                            (int16_t)(m.kbTextBox.y + 8 * m.scale), m.fontBody);
 
     // Top Row Buttons. The count and the width come from the metrics, so the drawn cells and the
     // hit zones in handleTouch() are the same rectangles by construction.

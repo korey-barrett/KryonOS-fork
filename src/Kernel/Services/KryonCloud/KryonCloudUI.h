@@ -51,7 +51,8 @@ private:
     static String beamTargetHandle;    // e.g. "@handle" or "#public"
     static int beamMsgTypeIndex;       // 0: TEXT, 1: ALERT, 2: TELEMETRY, 3: COMMAND
     static String beamContent;         // message body
-    static int beamPublicPage;         // Current page for #public stream (3 msgs / page)
+    static int beamPublicPage;         // Current page for #public stream
+    static int beamPublicPageSize;     // messages per page (what the panel can show)
     static String beamStatusToast;
     static unsigned long beamStatusToastTime;
 

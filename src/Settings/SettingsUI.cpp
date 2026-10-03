@@ -273,13 +273,16 @@ void SettingsUI::drawWiFi() {
         tftInstance->setTextColor(online ? TFT_GREEN : TFT_ORANGE, 0x10A2);
         tftInstance->drawString(online ? "Status: ONLINE" : "Status: LOCAL ONLY", textX, line1Y, m.fontBody);
 
-        // Signal bars, pinned to the right edge of the card
+        // Signal bars, pinned to the right edge of the card. Four bars 4px wide and 3px per
+        // step is a 240x320 size; at 2x text they would be pinpricks, so the whole group scales.
         const int bars = WiFiManager::getSignalBars();
-        const int sx = (int)(card.right() - 35);
-        const int sy = (int)(card.y + 22);
+        const int16_t barScale = (int16_t)m.scale;
+        const int sx = (int)(card.right() - 35 * barScale);
+        const int sy = (int)(card.y + 22 * barScale);
         for (int b = 1; b <= 4; b++) {
             const uint16_t bColor = (b <= bars) ? (online ? TFT_GREEN : TFT_ORANGE) : TFT_DARKGREY;
-            tftInstance->fillRect(sx + (b - 1) * 6, sy - (b * 3), 4, b * 3, bColor);
+            tftInstance->fillRect(sx + (b - 1) * 6 * barScale, sy - (b * 3 * barScale),
+                                  4 * barScale, b * 3 * barScale, bColor);
         }
 
         tftInstance->setTextColor(TFT_WHITE, 0x10A2);
@@ -689,7 +692,8 @@ void SettingsUI::drawAboutLoading(int percent, const String& statusText) {
     drawSettingsFrame(tftInstance, "About Device");
 
     // Loading Card
-    const UiRect card = { m.list.x, (int16_t)(m.list.y + 40), m.list.w, (int16_t)(m.list.h - 100) };
+    const UiRect card = { m.list.x, (int16_t)(m.list.y + 40 * m.scale), m.list.w,
+                          (int16_t)(m.list.h - 100 * m.scale) };
     tftInstance->fillRoundRect(card.x, card.y, card.w, card.h, 6, 0x10A2); // Dark cyber navy
     tftInstance->drawRoundRect(card.x, card.y, card.w, card.h, 6, TFT_CYAN);
 
@@ -898,7 +902,7 @@ void SettingsUI::handleAboutTouch(uint16_t x, uint16_t y) {
 
             FileSystem::formatLittleFS();
 
-            tftInstance->drawString("Rebooting...", m.centerX, (int16_t)(m.centerY + 40), m.fontHeader);
+            tftInstance->drawString("Rebooting...", m.centerX, (int16_t)(m.centerY + 40 * m.scale), m.fontHeader);
             tftInstance->present();
             delay(1000);
             ESP.restart();
@@ -1291,7 +1295,7 @@ static void loadPermissionsData() {
 namespace {
 int16_t permCardH(const UiMetrics& m)     { return (int16_t)(m.rowH + 32); }
 int16_t permCardPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 38); }
-int16_t permCardsTop(const UiMetrics& m)  { return (int16_t)(m.header.bottom() + 6); }
+int16_t permCardsTop(const UiMetrics& m)  { return (int16_t)(m.header.bottom() + 6 * m.scale); }
 
 // "Reset All" shares the header row with the left-aligned title, so it is pinned to the right edge.
 UiRect permResetAllButton(const UiMetrics& m) {
@@ -1402,8 +1406,8 @@ void SettingsUI::drawPermissions() {
     }
 
     if (s_permApps.empty()) {
-        const UiRect card = { m.list.x, (int16_t)(m.list.y + 10), m.list.w,
-                              (int16_t)(m.list.h - 40) };
+        const UiRect card = { m.list.x, (int16_t)(m.list.y + 10 * m.scale), m.list.w,
+                              (int16_t)(m.list.h - 40 * m.scale) };
         tftInstance->fillRoundRect(card.x, card.y, card.w, card.h, 6, 0x10A2); // Dark navy
         tftInstance->drawRoundRect(card.x, card.y, card.w, card.h, 6, TFT_CYAN);
 
@@ -1634,9 +1638,11 @@ const int tzCount = sizeof(tzList) / sizeof(TZEntry);
 
 namespace {
 // The main Time screen: a fixed "current time" header, then a stack of option buttons.
-const int16_t TIME_HEADER_H = 65;
+// The clock header: "Current Time:" over the time itself, 65px of a 240x320 screen. It holds two
+// glyphs at the text scale, so it has to grow with them or the clock lands on the buttons.
+int16_t timeHeaderH(const UiMetrics& m)  { return (int16_t)(65 * m.scale); }
 
-int16_t timeBtnTop(const UiMetrics& m)   { return (int16_t)(m.list.y + TIME_HEADER_H); }
+int16_t timeBtnTop(const UiMetrics& m)   { return (int16_t)(m.list.y + timeHeaderH(m)); }
 int16_t timeBtnH(const UiMetrics& m)     { return (int16_t)(m.rowH + 5); }
 int16_t timeBtnPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 15); }
 
@@ -1654,7 +1660,8 @@ UiRect timeButtonRect(const UiMetrics& m, int visibleIndex) {
 }
 
 // Timezone picker rows sit just below the "Select Timezone" heading.
-int16_t tzRowsTop(const UiMetrics& m)  { return (int16_t)(m.list.y + 15); }
+// Below the "Select Timezone" heading, which is centred on list.y and so reaches 8*scale above it.
+int16_t tzRowsTop(const UiMetrics& m)  { return (int16_t)(m.list.y + 15 * m.scale); }
 int16_t tzRowPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 5); }
 
 int tzRowsPerPage(const UiMetrics& m) {
@@ -1672,12 +1679,12 @@ UiRect tzRowRect(const UiMetrics& m, int visibleIndex) {
 // --- Manual-time spinners -------------------------------------------------------------------
 // A spinner is an up triangle, a value box and a down triangle stacked in one rect.
 
-int16_t spinnerSectionH(const UiMetrics& m) { return (int16_t)(2 * (m.rowH / 2) + m.rowH + 10); }
-int16_t spinnerBoxY(const UiRect& r, const UiMetrics& m) { return (int16_t)(r.y + m.rowH / 2 + 5); }
+int16_t spinnerSectionH(const UiMetrics& m) { return (int16_t)(2 * (m.rowH / 2) + m.rowH + 10 * m.scale); }
+int16_t spinnerBoxY(const UiRect& r, const UiMetrics& m) { return (int16_t)(r.y + m.rowH / 2 + 5 * m.scale); }
 
 // The two spinner rows, one section apart.
 int16_t spinnerRowY(const UiMetrics& m, int rowIndex) {
-    return (int16_t)(m.list.y + 15 + rowIndex * (spinnerSectionH(m) + m.rowH));
+    return (int16_t)(m.list.y + 15 * m.scale + rowIndex * (spinnerSectionH(m) + m.rowH));
 }
 
 // Tapping the upper half of a spinner increments it, the lower half decrements — the split falls on
@@ -1762,10 +1769,10 @@ void SettingsUI::drawTimeSettings() {
     // Current time header
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Current Time:", m.centerX, (int16_t)(m.list.y + 5), m.fontBody);
+    tftInstance->drawString("Current Time:", m.centerX, (int16_t)(m.list.y + 5 * m.scale), m.fontBody);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->drawString(TimeManager::getFormattedTime(), m.centerX,
-                            (int16_t)(m.list.y + 30), m.fontHeader);
+                            (int16_t)(m.list.y + 30 * m.scale), m.fontHeader);
 
     // Options
     struct TimeAction { String label; uint16_t bg; uint16_t fg; };
@@ -1965,7 +1972,7 @@ namespace {
 // The scanner list: one card per access point, plus a Cancel / Next Page bar pinned above the footer.
 int16_t scanCardH(const UiMetrics& m)     { return (int16_t)(m.rowH + 12); }
 int16_t scanCardPitch(const UiMetrics& m) { return (int16_t)(m.rowH + 16); }
-int16_t scanCardsTop(const UiMetrics& m)  { return (int16_t)(m.header.bottom() + 10); }
+int16_t scanCardsTop(const UiMetrics& m)  { return (int16_t)(m.header.bottom() + 10 * m.scale); }
 
 int scanCardsPerPage(const UiMetrics& m) {
     const int pitch = scanCardPitch(m);
@@ -1996,7 +2003,7 @@ void SettingsUI::scanAndConnectWiFi() {
 
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Scanning 2.4GHz Networks...", m.centerX, (int16_t)(m.centerY - 20),
+    tftInstance->drawString("Scanning 2.4GHz Networks...", m.centerX, (int16_t)(m.centerY - 20 * m.scale),
                             m.fontBody);
     // This function blocks, so the main loop cannot flush the frame -- see the note in
     // MyKeyboard::getString(). Without this the scanner page is drawn into a canvas nobody copies to
@@ -2021,7 +2028,7 @@ void SettingsUI::scanAndConnectWiFi() {
     bool scanTimedOut = false;
     int spinAngle = 0;
     int16_t scanStatus = WIFI_SCAN_RUNNING;
-    const int16_t spinY = (int16_t)(m.centerY + 30);
+    const int16_t spinY = (int16_t)(m.centerY + 30 * m.scale);
     const int16_t spinR = (int16_t)max(6, min(18, (int)(m.list.h / 12)));
     while ((scanStatus = WiFi.scanComplete()) == WIFI_SCAN_RUNNING) {
         // Draw spinning radar / circle
@@ -2203,8 +2210,8 @@ void SettingsUI::scanAndConnectWiFi() {
             tftInstance->fillScreen(TFT_BLACK);
             tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
             tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString("Connecting to", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
-            tftInstance->drawString(selectedSSID + "...", m.centerX, (int16_t)(m.centerY + 5),
+            tftInstance->drawString("Connecting to", m.centerX, (int16_t)(m.centerY - 20 * m.scale), m.fontBody);
+            tftInstance->drawString(selectedSSID + "...", m.centerX, (int16_t)(m.centerY + 5 * m.scale),
                                     m.fontBody);
             tftInstance->present();
 
@@ -2276,7 +2283,7 @@ static uint8_t otaTitleFont(const UiMetrics& m) { return (m.h >= 240) ? 4 : (uin
 
 static UiRect otaBarRect(const UiMetrics& m) {
     const int16_t h = (int16_t)max(8, (int)(m.rowH * 2 / 3));
-    return { (int16_t)(m.list.x + 8), (int16_t)(m.centerY - 15), (int16_t)(m.list.w - 16), h };
+    return { (int16_t)(m.list.x + 8), (int16_t)(m.centerY - 15 * m.scale), (int16_t)(m.list.w - 16), h };
 }
 
 static UiRect otaErrorHeader(const UiMetrics& m) {
@@ -2324,7 +2331,7 @@ void SettingsUI::drawOTAProgress(int percent, size_t currentBytes, size_t totalB
 
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->drawString("Downloading & Flashing...", m.centerX,
-                            (int16_t)(m.header.bottom() + 6), m.fontBody);
+                            (int16_t)(m.header.bottom() + 6 * m.scale), m.fontBody);
 
     // Main Percentage
     tftInstance->setTextDatum(MC_DATUM);
@@ -2361,10 +2368,10 @@ void SettingsUI::drawOTAProgress(int percent, size_t currentBytes, size_t totalB
     // Critical Safety Notice, pinned above the panel's lower edge
     tftInstance->setTextColor(TFT_RED, TFT_BLACK);
     tftInstance->drawString("DO NOT POWER OFF DEVICE", m.centerX,
-                            (int16_t)(m.centerY + 85), m.fontBody);
+                            (int16_t)(m.centerY + 85 * m.scale), m.fontBody);
     tftInstance->setTextColor(TFT_DARKGREY, TFT_BLACK);
     tftInstance->drawString("Anti-rollback protection active", m.centerX,
-                            (int16_t)(m.centerY + 105), m.fontSmall);
+                            (int16_t)(m.centerY + 105 * m.scale), m.fontSmall);
 
     // Flush each step: the download and flash call this from inside their own loop, so the main loop
     // never gets a turn until the update is over. See the note in MyKeyboard::getString().
@@ -2449,10 +2456,10 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
     if (WiFi.status() != WL_CONNECTED) {
         tftInstance->setTextDatum(MC_DATUM);
         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
-        tftInstance->drawString("No WiFi Connection!", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
+        tftInstance->drawString("No WiFi Connection!", m.centerX, (int16_t)(m.centerY - 20 * m.scale), m.fontBody);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
         tftInstance->drawString("Please turn on WiFi", m.centerX, m.centerY, m.fontBody);
-        tftInstance->drawString("first in Settings.", m.centerX, (int16_t)(m.centerY + 20), m.fontBody);
+        tftInstance->drawString("first in Settings.", m.centerX, (int16_t)(m.centerY + 20 * m.scale), m.fontBody);
 
         tftInstance->drawRoundRect(dismiss.x, dismiss.y, dismiss.w, dismiss.h, 5, TFT_WHITE);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
@@ -2482,40 +2489,43 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
     if (info.fetchFailed) {
         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("Failed to check", m.centerX, (int16_t)(m.centerY - 20), m.fontBody);
+        tftInstance->drawString("Failed to check", m.centerX, (int16_t)(m.centerY - 20 * m.scale), m.fontBody);
         tftInstance->drawString("for updates!", m.centerX, m.centerY, m.fontBody);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Check your connection", m.centerX, (int16_t)(m.centerY + 30),
+        tftInstance->drawString("Check your connection", m.centerX, (int16_t)(m.centerY + 30 * m.scale),
                                 m.fontBody);
     } else if (!hasUpdate) {
         tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("System is up to date!", m.centerX, (int16_t)(m.centerY - 15),
+        tftInstance->drawString("System is up to date!", m.centerX, (int16_t)(m.centerY - 15 * m.scale),
                                 m.fontBody);
         tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
         tftInstance->drawString(String("Current: v") + KRYONOS_VERSION, m.centerX,
-                                (int16_t)(m.centerY + 10), m.fontBody);
+                                (int16_t)(m.centerY + 10 * m.scale), m.fontBody);
     } else {
         tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
         tftInstance->setTextDatum(TC_DATUM);
+        const int16_t releaseLineH = (int16_t)(16 * m.scale);   // one body cell
+        const int16_t releaseX     = (int16_t)(m.list.x + 5 * m.scale);
+        const int maxReleaseChars  = 30 * m.scale;
         tftInstance->drawString(info.updateType.c_str(), m.centerX,
-                                (int16_t)(m.header.y + 4), m.fontBody);
+                                (int16_t)(m.header.y + 4 * m.scale), m.fontBody);
 
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
         tftInstance->drawString(String("v") + KRYONOS_VERSION + " -> v" + info.version, m.centerX,
-                                (int16_t)(m.header.y + 22), m.fontBody);
+                                (int16_t)(m.header.y + 22 * m.scale), m.fontBody);
 
         // Text flows down from the header and must stop above the install chip. When a guide is
         // present the changelog gets the upper half and the guide the lower.
         const bool hasGuide = info.guide.length() > 0;
         const int16_t installTop = install.y;
-        const int16_t maxChangelogY = (int16_t)(hasGuide ? installTop - 94 : installTop - 49);
-        const int16_t maxGuideY = (int16_t)(installTop - 29);
+        const int16_t maxChangelogY = (int16_t)(installTop - (hasGuide ? 94 : 49) * m.scale);
+        const int16_t maxGuideY = (int16_t)(installTop - 29 * m.scale);
 
-        int y = m.header.bottom() + 12;
+        int y = (int16_t)(m.header.bottom() + 12 * m.scale);
         tftInstance->setTextColor(TFT_YELLOW, TFT_BLACK);
         tftInstance->setTextDatum(TL_DATUM);
-        tftInstance->drawString("What's New:", (int16_t)(m.list.x + 5), y, m.fontBody); y += 15;
+        tftInstance->drawString("What's New:", releaseX, y, m.fontBody); y += releaseLineH;
 
         tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
         int start = 0;
@@ -2527,12 +2537,12 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
 
             int lStart = 0;
             while (lStart < (int)line.length() && y < maxChangelogY) {
-                int lEnd = lStart + 30;
+                int lEnd = lStart + maxReleaseChars;
                 if (lEnd >= (int)line.length()) lEnd = line.length();
                 else { int space = line.lastIndexOf(' ', lEnd); if (space > lStart) lEnd = space; }
                 tftInstance->drawString(line.substring(lStart, lEnd).c_str(),
-                                        (int16_t)(m.list.x + 5), y, m.fontBody);
-                y += 14;
+                                        releaseX, y, m.fontBody);
+                y += releaseLineH;
                 lStart = lEnd;
                 if (lStart < (int)line.length() && line[lStart] == ' ') lStart++;
             }
@@ -2540,9 +2550,9 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
 
         // Render Guide if present and non-empty
         if (hasGuide) {
-            y += 4;
+            y += (int16_t)(4 * m.scale);
             tftInstance->setTextColor(TFT_YELLOW, TFT_BLACK);
-            tftInstance->drawString("How to Install:", (int16_t)(m.list.x + 5), y, m.fontBody); y += 14;
+            tftInstance->drawString("How to Install:", releaseX, y, m.fontBody); y += releaseLineH;
             tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
             int gStart = 0;
             while (gStart < (int)info.guide.length() && y < maxGuideY) {
@@ -2553,12 +2563,12 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
 
                 int lStart = 0;
                 while (lStart < (int)line.length() && y < maxGuideY) {
-                    int lEnd = lStart + 30;
+                    int lEnd = lStart + maxReleaseChars;
                     if (lEnd >= (int)line.length()) lEnd = line.length();
                     else { int space = line.lastIndexOf(' ', lEnd); if (space > lStart) lEnd = space; }
                     tftInstance->drawString(line.substring(lStart, lEnd).c_str(),
-                                            (int16_t)(m.list.x + 5), y, m.fontBody);
-                    y += 14;
+                                            releaseX, y, m.fontBody);
+                    y += releaseLineH;
                     lStart = lEnd;
                     if (lStart < (int)line.length() && line[lStart] == ' ') lStart++;
                 }

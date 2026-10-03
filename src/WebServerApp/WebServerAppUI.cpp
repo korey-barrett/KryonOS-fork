@@ -17,16 +17,19 @@ struct WebAppRects {
 
 WebAppRects webAppRects(const UiMetrics& m) {
     WebAppRects r{};
-    const int16_t bx = (int16_t)(m.list.x + 2);
-    const int16_t bw = (int16_t)((m.list.w - 12) / 2);
-    const int16_t toggleY = (int16_t)(m.footer.y - 55);
-    const int16_t rowY = (int16_t)(toggleY - 48);
+    const int16_t s = (int16_t)m.scale;   // 1 at 240x320, so the historical literals are reproduced
+    const int16_t bx = (int16_t)(m.list.x + 2 * s);
+    const int16_t bw = (int16_t)((m.list.w - 12 * s) / 2);
+    const int16_t toggleY = (int16_t)(m.footer.y - 55 * s);
+    const int16_t rowY = (int16_t)(toggleY - 48 * s);
 
-    r.setUser = { bx, rowY, bw, 32 };
-    r.setPass = { (int16_t)(bx + bw + 8), rowY, bw, 32 };
+    // 32 and 36 are the 240x320 button heights: one body glyph plus padding, and the taller
+    // toggle. Both follow the text scale so the labels stay inside their rounded rect.
+    r.setUser = { bx, rowY, bw, (int16_t)(32 * s) };
+    r.setPass = { (int16_t)(bx + bw + 8 * s), rowY, bw, (int16_t)(32 * s) };
 
     const int16_t tw = (int16_t)(m.w * 5 / 8);
-    r.toggle = { (int16_t)(m.centerX - tw / 2), toggleY, tw, 36 };
+    r.toggle = { (int16_t)(m.centerX - tw / 2), toggleY, tw, (int16_t)(36 * s) };
     return r;
 }
 } // namespace
@@ -58,78 +61,69 @@ void WebServerAppUI::draw() {
     bool isRunning = WebManager::isServerRunning();
 
     tftInstance->setTextDatum(TL_DATUM);
-    
-    int y = m.header.bottom() + 8;
-    const int spacing = 20;
+
+    // Three lines of info, one body glyph plus leading each. The block used to run to six lines by
+    // spelling out a "Credentials:" heading and one line per credential; this panel is only 1.5x
+    // taller than the reference while the text is 2x, so the heading went and the credentials share
+    // a line. What is shown follows what the state is for: the URL while the server is up, the
+    // credentials while it is down and you would be typing them in.
+    const int16_t s = (int16_t)m.scale;
+    const int16_t linePitch = (int16_t)(20 * s);
+
+    int16_t y = (int16_t)(m.header.bottom() + 8 * s);
 
     String user = WebManager::getAdminUsername();
     String pass = WebManager::getAdminPassword();
 
     if (wifiDisabled) {
         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
-        tftInstance->drawString("WiFi is DISABLED", m.list.x + 5, y, m.fontBody);
-        y += spacing + 5;
+        tftInstance->drawString("WiFi is DISABLED", m.list.x + 5 * s, y, m.fontBody);
+        y += linePitch;
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Please turn on WiFi", m.list.x + 5, y, m.fontBody);
-        y += spacing;
-        tftInstance->drawString("in Settings > WiFi.", m.list.x + 5, y, m.fontBody);
+        tftInstance->drawString("Please turn on WiFi", m.list.x + 5 * s, y, m.fontBody);
+        y += linePitch;
+        tftInstance->drawString("in Settings > WiFi.", m.list.x + 5 * s, y, m.fontBody);
     } else if (!isConnected) {
         tftInstance->setTextColor(TFT_YELLOW, TFT_BLACK);
-        tftInstance->drawString("WiFi DISCONNECTED", m.list.x + 5, y, m.fontBody);
-        y += spacing + 5;
+        tftInstance->drawString("WiFi DISCONNECTED", m.list.x + 5 * s, y, m.fontBody);
+        y += linePitch;
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Connect to a network", m.list.x + 5, y, m.fontBody);
-        y += spacing;
-        tftInstance->drawString("to start Web Server.", m.list.x + 5, y, m.fontBody);
+        tftInstance->drawString("Connect to a network", m.list.x + 5 * s, y, m.fontBody);
+        y += linePitch;
+        tftInstance->drawString("to start Web Server.", m.list.x + 5 * s, y, m.fontBody);
     } else if (!isRunning) {
         String ip = WebManager::getIPAddress();
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Status:", m.list.x + 5, y, m.fontBody);
+        tftInstance->drawString("Status:", m.list.x + 5 * s, y, m.fontBody);
         tftInstance->setTextColor(TFT_ORANGE, TFT_BLACK);
-        tftInstance->drawString("STOPPED", m.list.x + 65, y, m.fontBody);
-        y += spacing;
+        tftInstance->drawString("STOPPED", m.list.x + 65 * s, y, m.fontBody);
+        y += linePitch;
 
         tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-        tftInstance->drawString("IP:", m.list.x + 5, y, m.fontBody);
+        tftInstance->drawString("IP:", m.list.x + 5 * s, y, m.fontBody);
         tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
-        tftInstance->drawString(ip, m.list.x + 35, y, m.fontBody);
-        y += spacing;
-
-        tftInstance->setTextColor(TFT_GOLD, TFT_BLACK);
-        tftInstance->drawString("Credentials:", m.list.x + 5, y, m.fontBody);
-        y += spacing;
+        tftInstance->drawString(ip, m.list.x + 35 * s, y, m.fontBody);
+        y += linePitch;
 
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("User: " + user, m.list.x + 5, y, m.fontBody);
-        y += spacing;
-        tftInstance->drawString("Pass: " + pass, m.list.x + 5, y, m.fontBody);
+        tftInstance->drawString("User: " + user + "   Pass: " + pass, m.list.x + 5 * s, y, m.fontBody);
     } else {
         String ip = WebManager::getIPAddress();
 
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("Status:", m.list.x + 5, y, m.fontBody);
+        tftInstance->drawString("Status:", m.list.x + 5 * s, y, m.fontBody);
         tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-        tftInstance->drawString("RUNNING", m.list.x + 65, y, m.fontBody);
-        y += spacing;
+        tftInstance->drawString("RUNNING", m.list.x + 65 * s, y, m.fontBody);
+        y += linePitch;
 
         tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-        tftInstance->drawString("IP:", m.list.x + 5, y, m.fontBody);
+        tftInstance->drawString("IP:", m.list.x + 5 * s, y, m.fontBody);
         tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
-        tftInstance->drawString(ip, m.list.x + 35, y, m.fontBody);
-        y += spacing;
-
-        tftInstance->setTextColor(TFT_GOLD, TFT_BLACK);
-        tftInstance->drawString("Credentials:", m.list.x + 5, y, m.fontBody);
-        y += spacing;
-
-        tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("User: " + user, m.list.x + 5, y, m.fontBody);
-        y += spacing;
-        tftInstance->drawString("Pass: " + pass, m.list.x + 5, y, m.fontBody);
-        y += spacing;
+        tftInstance->drawString(ip, m.list.x + 35 * s, y, m.fontBody);
+        y += linePitch;
 
         tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
-        tftInstance->drawString("http://" + ip, m.list.x + 5, y, m.fontBody);
+        tftInstance->drawString("http://" + ip, m.list.x + 5 * s, y, m.fontBody);
     }
 
     // Change User / Change Pass buttons

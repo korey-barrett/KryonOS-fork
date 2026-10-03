@@ -143,8 +143,12 @@ void setup() {
     Serial.println("DEBUG: Scanning Local Apps...");
     tft.fillScreen(TFT_BLACK);
     tft.drawString("Loading Apps...", Display::centerX(), Display::centerY(), M().fontBody);
-    // Loading bar outline: 18px side gutters, 38px below centre (18,198,204,14 at 240x320).
-    tft.drawRect(18, Display::centerY() + 38, Display::width() - 36, 14, TFT_WHITE);
+    // Loading bar outline: 18px side gutters, 38px below centre (18,198,204,14 at 240x320). The
+    // gutters, the offset and the height are all 240x320 pixels, so they follow the text scale --
+    // the fill LauncherUI::scanLocalApps() draws into this rect uses the same numbers.
+    const int16_t bootScale = (int16_t)M().scale;
+    tft.drawRect(18 * bootScale, (int16_t)(Display::centerY() + 38 * bootScale),
+                 (int16_t)(Display::width() - 36 * bootScale), (int16_t)(14 * bootScale), TFT_WHITE);
     tft.present();
     LauncherUI::scanLocalApps();
     LauncherUI::needsRescan = false;

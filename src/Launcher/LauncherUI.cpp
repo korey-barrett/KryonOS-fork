@@ -64,11 +64,14 @@ void LauncherUI::scanLocalApps() {
             Serial.printf("  Entry[%d]: name='%s' path='%s' isDir=%d\n", 
                           i, entries[i].name.c_str(), entries[i].path.c_str(), entries[i].isDir);
             
-            // Draw loading bar (inside the outline main.cpp draws: 20px gutters, 40px below centre)
-            if (tftInstance) {
+            // Draw loading bar (inside the outline main.cpp draws: 20px gutters, 40px below centre,
+            // both 240x320 pixels and so multiplied by the same text scale as that outline).
+            if (tftInstance && count > 0) {
                 const UiMetrics& m = M();
-                const int16_t barW = (int16_t)(m.w - 40);
-                tftInstance->fillRect(20, m.centerY + 40, (i * barW) / count, 10, TFT_GREEN);
+                const int16_t s = (int16_t)m.scale;
+                const int16_t barW = (int16_t)(m.w - 40 * s);
+                tftInstance->fillRect(20 * s, (int16_t)(m.centerY + 40 * s), (i * barW) / count,
+                                      (int16_t)(10 * s), TFT_GREEN);
                 // Flush per entry: this scan reads every app.json and nothing else runs until it
                 // finishes, so without this the bar the caller drew never advances. See the note in
                 // MyKeyboard::getString().

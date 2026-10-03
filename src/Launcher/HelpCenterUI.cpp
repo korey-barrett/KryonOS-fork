@@ -113,8 +113,10 @@ void HelpCenterUI::draw() {
 
 void HelpCenterUI::drawMainMenu() {
     const UiMetrics& m = M();
-    const UiRect offlineBtn = { (int16_t)(m.list.x + 10), (int16_t)(m.list.y + 35), (int16_t)(m.list.w - 20), 40 };
-    const UiRect onlineBtn  = { (int16_t)(m.list.x + 10), (int16_t)(m.list.y + 95), (int16_t)(m.list.w - 20), 40 };
+    const int16_t s = (int16_t)m.scale;
+    const int16_t btnH = (int16_t)(40 * s);   // one body glyph plus its padding, at this scale
+    const UiRect offlineBtn = { (int16_t)(m.list.x + 10 * s), (int16_t)(m.list.y + 35 * s), (int16_t)(m.list.w - 20 * s), btnH };
+    const UiRect onlineBtn  = { (int16_t)(m.list.x + 10 * s), (int16_t)(m.list.y + 95 * s), (int16_t)(m.list.w - 20 * s), btnH };
     tftInstance->drawRoundRect(m.frame.x, m.frame.y, m.frame.w, m.frame.h, 5, TFT_WHITE);
     tftInstance->fillRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_BLACK);
     tftInstance->drawRoundRect(m.header.x, m.header.y, m.header.w, m.header.h, 5, TFT_GREEN);
@@ -243,16 +245,23 @@ void HelpCenterUI::drawViewer() {
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(TL_DATUM);
 
+    // One body glyph is 16px before the text scale, so the line pitch, the line count that fits and
+    // the characters that fit on a line all move with it. At 240x320 that is a 16px pitch, 14 lines
+    // and 22 characters; at 2x text a 22px line would land on top of the one above it.
+    const int16_t s = (int16_t)m.scale;
+    const int linePitch = 16 * s;
+    const int maxChars  = (int)(m.list.w / (8 * s)) - 5;   // 8px per font-2 cell before the scale
+
     int yPos = m.list.y;
     int currentLine = 0;
-    const int visibleLines = (m.list.h > 0) ? (m.list.h / 16) : 1; // 14 lines at 240x320
+    const int visibleLines = (m.list.h > 0) ? (m.list.h / linePitch) : 1; // 14 lines at 240x320
 
     String content = currentViewerContent;
     while(content.length() > 0) {
-        int splitIdx = 22; // Max chars per line
-        if(content.length() <= 22) splitIdx = content.length();
+        int splitIdx = maxChars; // Max chars per line
+        if(content.length() <= maxChars) splitIdx = content.length();
         else {
-            int spaceIdx = content.lastIndexOf(' ', 22);
+            int spaceIdx = content.lastIndexOf(' ', maxChars);
             if(spaceIdx > 0) splitIdx = spaceIdx;
         }
 
@@ -263,7 +272,7 @@ void HelpCenterUI::drawViewer() {
 
         if (currentLine >= viewerScrollOffset && currentLine < viewerScrollOffset + visibleLines) {
             tftInstance->drawString(content.substring(0, splitIdx), m.list.x + 2, yPos, m.fontBody);
-            yPos += 16;
+            yPos += linePitch;
         }
 
         content = content.substring(splitIdx);
@@ -275,10 +284,10 @@ void HelpCenterUI::drawViewer() {
 
     // Up/Down Indicators
     if (viewerScrollOffset > 0) {
-        tftInstance->fillTriangle(m.list.right() - 10, m.list.y + 5, m.list.right(), m.list.y + 15, m.list.right() - 20, m.list.y + 15, TFT_WHITE);
+        tftInstance->fillTriangle(m.list.right() - 10 * s, m.list.y + 5 * s, m.list.right(), m.list.y + 15 * s, m.list.right() - 20 * s, m.list.y + 15 * s, TFT_WHITE);
     }
     if (currentLine > viewerScrollOffset + visibleLines) {
-        tftInstance->fillTriangle(m.list.right() - 10, m.list.bottom() - 10, m.list.right() - 20, m.list.bottom() - 20, m.list.right(), m.list.bottom() - 20, TFT_WHITE);
+        tftInstance->fillTriangle(m.list.right() - 10 * s, m.list.bottom() - 10 * s, m.list.right() - 20 * s, m.list.bottom() - 20 * s, m.list.right(), m.list.bottom() - 20 * s, TFT_WHITE);
     }
 
     tftInstance->fillRoundRect(m.footer.x, m.footer.y, m.footer.w, m.footer.h, 5, TFT_BLACK);
@@ -302,7 +311,7 @@ void HelpCenterUI::drawDialog() {
 
     const UiRect ok = m.dialogButton((int16_t)(m.dialogButtonRowY - 10), 30, 0, 1, 70);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString(dialogMessage, m.centerX, m.centerY - 20, m.fontBody);
+    tftInstance->drawString(dialogMessage, m.centerX, (int16_t)(m.centerY - 20 * m.scale), m.fontBody);
 
     tftInstance->drawRoundRect(ok.x, ok.y, ok.w, ok.h, 5, TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
@@ -355,8 +364,9 @@ bool HelpCenterUI::downloadFile(const String& url, const String& destPath, const
     tftInstance->fillScreen(TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString(loadingMsg, m.centerX, m.centerY - 20, m.fontBody);
-    const UiRect bar = { (int16_t)(m.centerX - (m.w - 60) / 2), m.centerY, (int16_t)(m.w - 60), 20 };
+    tftInstance->drawString(loadingMsg, m.centerX, (int16_t)(m.centerY - 20 * m.scale), m.fontBody);
+    const UiRect bar = { (int16_t)(m.centerX - (m.w - 60 * m.scale) / 2), (int16_t)m.centerY,
+                         (int16_t)(m.w - 60 * m.scale), (int16_t)(20 * m.scale) };
     tftInstance->drawRect(bar.x, bar.y, bar.w, bar.h, TFT_WHITE);
     tftInstance->present(); // the GET below blocks; this is the help centre's only loading draw
 
@@ -512,8 +522,11 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
     const UiMetrics& m = M();
 
     if (uiState == 0) { // Main Menu
-        const UiRect offlineBtn = { (int16_t)(m.list.x + 10), (int16_t)(m.list.y + 35), (int16_t)(m.list.w - 20), 40 };
-        const UiRect onlineBtn  = { (int16_t)(m.list.x + 10), (int16_t)(m.list.y + 95), (int16_t)(m.list.w - 20), 40 };
+        // Same rectangles drawMainMenu paints — see the note there.
+        const int16_t s = (int16_t)m.scale;
+        const int16_t btnH = (int16_t)(40 * s);
+        const UiRect offlineBtn = { (int16_t)(m.list.x + 10 * s), (int16_t)(m.list.y + 35 * s), (int16_t)(m.list.w - 20 * s), btnH };
+        const UiRect onlineBtn  = { (int16_t)(m.list.x + 10 * s), (int16_t)(m.list.y + 95 * s), (int16_t)(m.list.w - 20 * s), btnH };
         if (offlineBtn.contains((int16_t)x, (int16_t)y)) {
             selectedIndex = 0; draw();
             loadOfflineCategories();

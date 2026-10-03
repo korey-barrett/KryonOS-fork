@@ -368,7 +368,7 @@ void InstallerUI::drawFileList() {
     if (totalItems == 0) {
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
         tftInstance->setTextDatum(TC_DATUM);
-        tftInstance->drawString("Folder is empty", m.centerX, (int16_t)(m.list.y + 55), m.fontBody);
+        tftInstance->drawString("Folder is empty", m.centerX, m.listMessageY, m.fontBody);
     } else {
         for (int i = 0; i < itemsPerPage; i++) {
             int listIndex = scrollOffset + i;
@@ -402,7 +402,8 @@ void InstallerUI::drawFileList() {
                 tftInstance->fillRect(fill.x, fill.y, fill.w, fill.h, TFT_WHITE);
                 tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
                 tftInstance->setTextDatum(ML_DATUM);
-                tftInstance->drawString(("> " + displayName).c_str(), row.x + 5, row.y + 12, m.fontBody);
+                tftInstance->drawString(("> " + displayName).c_str(),
+                                        (int16_t)(row.x + m.rowTextPadX), m.listRowTextY(i), m.fontBody);
             } else {
                 // Normal Item
                 uint16_t textColor = TFT_WHITE;
@@ -412,7 +413,8 @@ void InstallerUI::drawFileList() {
                 }
                 tftInstance->setTextColor(textColor, TFT_BLACK);
                 tftInstance->setTextDatum(ML_DATUM);
-                tftInstance->drawString(("  " + displayName).c_str(), row.x + 5, row.y + 12, m.fontBody);
+                tftInstance->drawString(("  " + displayName).c_str(),
+                                        (int16_t)(row.x + m.rowTextPadX), m.listRowTextY(i), m.fontBody);
             }
         }
     }
@@ -441,101 +443,119 @@ void InstallerUI::drawFileList() {
 
 void InstallerUI::drawActionDialog() {
     const UiMetrics& m = M();
+    // These dialogs are laid out in 240x320 pixels throughout -- panel heights, offsets inside the
+    // panel, button sizes. `s` is the text scale (UiLayout), so multiplying every one of them puts
+    // the frames around the text instead of the text over the frames. At 240x320 s is 1 and every
+    // number below reproduces the historical literal exactly.
+    const int16_t s = (int16_t)m.scale;
+    const int16_t linePitch = (int16_t)(16 * s);   // one body glyph plus its leading
+
     tftInstance->fillScreen(TFT_BLACK);
 
     if (installState == 1) { // Overwrite Prompt
-        const UiRect panel  = m.dialogPanel(160);
-        const UiRect yesBtn = m.dialogButtonSpaced((int16_t)(panel.y + 100), 30, 0, 2, 70, 40);
-        const UiRect noBtn  = m.dialogButtonSpaced((int16_t)(panel.y + 100), 30, 1, 2, 70, 40);
+        const UiRect panel  = m.dialogPanel((int16_t)(160 * s));
+        const int16_t btnH  = (int16_t)(30 * s);
+        const int16_t btnY  = (int16_t)(panel.y + 100 * s);
+        const UiRect yesBtn = m.dialogButtonSpaced(btnY, btnH, 0, 2, (int16_t)(70 * s), (int16_t)(40 * s));
+        const UiRect noBtn  = m.dialogButtonSpaced(btnY, btnH, 1, 2, (int16_t)(70 * s), (int16_t)(40 * s));
 
-        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_DARKGREY);
+        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_DARKGREY);
         tftInstance->setTextColor(TFT_YELLOW, TFT_DARKGREY);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("App Exists!", panel.cx(), (int16_t)(panel.y + 30), 4);
+        tftInstance->drawString("App Exists!", panel.cx(), (int16_t)(panel.y + 30 * s), 4);
         tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-        tftInstance->drawString("Overwrite?", panel.cx(), (int16_t)(panel.y + 60), 2);
+        tftInstance->drawString("Overwrite?", panel.cx(), (int16_t)(panel.y + 60 * s), 2);
 
-        tftInstance->fillRoundRect(yesBtn.x, yesBtn.y, yesBtn.w, yesBtn.h, 4, TFT_GREEN);
+        tftInstance->fillRoundRect(yesBtn.x, yesBtn.y, yesBtn.w, yesBtn.h, (int32_t)(4 * s), TFT_GREEN);
         tftInstance->setTextColor(TFT_BLACK, TFT_GREEN);
         tftInstance->drawString("Yes", yesBtn.cx(), yesBtn.cy(), 2);
 
-        tftInstance->fillRoundRect(noBtn.x, noBtn.y, noBtn.w, noBtn.h, 4, TFT_RED);
+        tftInstance->fillRoundRect(noBtn.x, noBtn.y, noBtn.w, noBtn.h, (int32_t)(4 * s), TFT_RED);
         tftInstance->setTextColor(TFT_WHITE, TFT_RED);
         tftInstance->drawString("No", noBtn.cx(), noBtn.cy(), 2);
         return;
     } else if (installState == 2) { // Result
-        const UiRect panel = m.dialogPanel(200);
-        const UiRect okBtn = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 0, 1, 70, 0);
+        const UiRect panel = m.dialogPanel((int16_t)(200 * s));
+        const UiRect okBtn = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40 * s), (int16_t)(30 * s),
+                                                  0, 1, (int16_t)(70 * s), 0);
 
-        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_DARKGREY);
+        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_DARKGREY);
         tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
         tftInstance->setTextDatum(MC_DATUM);
         if (installResultOk) {
             tftInstance->setTextColor(TFT_GREEN, TFT_DARKGREY);
-            tftInstance->drawString("Installed!", panel.cx(), (int16_t)(panel.y + 40), 4);
+            tftInstance->drawString("Installed!", panel.cx(), (int16_t)(panel.y + 40 * s), 4);
             tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-            tftInstance->drawString(currentAppMeta.name, panel.cx(), (int16_t)(panel.y + 70), 2);
-            tftInstance->drawString("v" + currentAppMeta.version, panel.cx(), (int16_t)(panel.y + 90), 2);
+            tftInstance->drawString(currentAppMeta.name, panel.cx(), (int16_t)(panel.y + 70 * s), 2);
+            tftInstance->drawString("v" + currentAppMeta.version, panel.cx(), (int16_t)(panel.y + 90 * s), 2);
         } else {
             tftInstance->setTextColor(TFT_RED, TFT_DARKGREY);
             if (installNoMetadata) {
-                tftInstance->drawString("No Metadata!", panel.cx(), (int16_t)(panel.y + 30), 4);
+                tftInstance->drawString("No Metadata!", panel.cx(), (int16_t)(panel.y + 30 * s), 4);
                 tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-                tftInstance->drawString("Folder missing app.json", panel.cx(), (int16_t)(panel.y + 65), 2);
-                tftInstance->drawString("Cannot install.", panel.cx(), (int16_t)(panel.y + 85), 2);
+                tftInstance->drawString("Folder missing app.json", panel.cx(), (int16_t)(panel.y + 65 * s), 2);
+                tftInstance->drawString("Cannot install.", panel.cx(), (int16_t)(panel.y + 85 * s), 2);
             } else if (installApiError) {
-                tftInstance->drawString("API Error!", panel.cx(), (int16_t)(panel.y + 30), 4);
+                tftInstance->drawString("API Error!", panel.cx(), (int16_t)(panel.y + 30 * s), 4);
                 tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-                tftInstance->drawString("App requires API: " + String(currentAppMeta.api), panel.cx(), (int16_t)(panel.y + 65), 2);
-                tftInstance->drawString("OS has API: " + String(KRYONOS_API_LEVEL), panel.cx(), (int16_t)(panel.y + 85), 2);
-                tftInstance->drawString("Update KryonOS!", panel.cx(), (int16_t)(panel.y + 110), 2);
+                tftInstance->drawString("App requires API: " + String(currentAppMeta.api), panel.cx(), (int16_t)(panel.y + 65 * s), 2);
+                tftInstance->drawString("OS has API: " + String(KRYONOS_API_LEVEL), panel.cx(), (int16_t)(panel.y + 85 * s), 2);
+                tftInstance->drawString("Update KryonOS!", panel.cx(), (int16_t)(panel.y + 110 * s), 2);
             } else if (installSyntaxError) {
-                tftInstance->drawString("Syntax Error!", panel.cx(), (int16_t)(panel.y + 30), 4);
+                tftInstance->drawString("Syntax Error!", panel.cx(), (int16_t)(panel.y + 30 * s), 4);
 
                 tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
                 tftInstance->setTextDatum(TC_DATUM);
+                // Font 1 has an 8px cell and a 10px line before the scale, and 30 characters was
+                // 180px of the 220px panel — so both the pitch and the 30-character cut-off follow
+                // the scale, and the line count is whatever still clears the OK button.
+                const int16_t monoPitch = (int16_t)(10 * s);
+                const int maxMonoChars  = 30 * s;
                 int startIdx = 0;
-                int yPos = panel.y + 55;
+                int yPos = (int16_t)(panel.y + 55 * s);
                 int lineCount = 0;
-                while (startIdx < (int)syntaxErrorMessage.length() && lineCount < 4) {
+                const int maxMonoLines = (int)((okBtn.y - yPos) / monoPitch);
+                while (startIdx < (int)syntaxErrorMessage.length() && lineCount < 4 && lineCount < maxMonoLines) {
                     int nextNewline = syntaxErrorMessage.indexOf('\n', startIdx);
                     if (nextNewline == -1) nextNewline = syntaxErrorMessage.length();
                     String line = syntaxErrorMessage.substring(startIdx, nextNewline);
-                    if (line.length() > 30) line = line.substring(0, 27) + "...";
+                    if ((int)line.length() > maxMonoChars) line = line.substring(0, maxMonoChars - 3) + "...";
                     tftInstance->drawString(line, panel.cx(), yPos, 1);
-                    yPos += 10;
+                    yPos += monoPitch;
                     startIdx = nextNewline + 1;
                     lineCount++;
                 }
                 tftInstance->setTextDatum(MC_DATUM);
             } else {
-                tftInstance->drawString("Failed!", panel.cx(), (int16_t)(panel.y + 60), 4);
+                tftInstance->drawString("Failed!", panel.cx(), (int16_t)(panel.y + 60 * s), 4);
             }
         }
 
-        tftInstance->fillRoundRect(okBtn.x, okBtn.y, okBtn.w, okBtn.h, 4, TFT_BLUE);
+        tftInstance->fillRoundRect(okBtn.x, okBtn.y, okBtn.w, okBtn.h, (int32_t)(4 * s), TFT_BLUE);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
         tftInstance->setTextDatum(MC_DATUM);
         tftInstance->drawString("OK", okBtn.cx(), okBtn.cy(), 2);
         return;
     } else if (installState == 3) { // App Info Dialog (before install)
-        const UiRect panel  = m.dialogPanel(240);
-        const int16_t inset = (int16_t)(panel.x + 15);   // 25 at 240x320
-        const UiRect installBtn = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 0, 2, 80, 30);
-        const UiRect cancelBtn  = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 1, 2, 80, 30);
+        const UiRect panel  = m.dialogPanel((int16_t)(240 * s));
+        const int16_t inset = (int16_t)(panel.x + 15 * s);   // 25 at 240x320
+        const int16_t btnH  = (int16_t)(30 * s);
+        const int16_t btnY  = (int16_t)(panel.bottom() - 40 * s);
+        const UiRect installBtn = m.dialogButtonSpaced(btnY, btnH, 0, 2, (int16_t)(80 * s), (int16_t)(30 * s));
+        const UiRect cancelBtn  = m.dialogButtonSpaced(btnY, btnH, 1, 2, (int16_t)(80 * s), (int16_t)(30 * s));
 
-        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_DARKGREY);
+        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_DARKGREY);
         tftInstance->setTextColor(TFT_GREEN, TFT_DARKGREY);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString(currentAppMeta.name, panel.cx(), (int16_t)(panel.y + 25), 4);
+        tftInstance->drawString(currentAppMeta.name, panel.cx(), (int16_t)(panel.y + 25 * s), 4);
 
         tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
         tftInstance->setTextDatum(TL_DATUM);
-        int y = panel.y + 50;
-        tftInstance->drawString("Version: " + currentAppMeta.version, inset, y, 2); y += 16;
-        tftInstance->drawString("Author:  " + currentAppMeta.author, inset, y, 2); y += 16;
-        tftInstance->drawString("Type:    " + currentAppMeta.type, inset, y, 2); y += 16;
-        tftInstance->drawString("Category: " + currentAppMeta.category, inset, y, 2); y += 20;
+        int y = (int16_t)(panel.y + 50 * s);
+        tftInstance->drawString("Version: " + currentAppMeta.version, inset, y, 2); y += linePitch;
+        tftInstance->drawString("Author:  " + currentAppMeta.author, inset, y, 2); y += linePitch;
+        tftInstance->drawString("Type:    " + currentAppMeta.type, inset, y, 2); y += linePitch;
+        tftInstance->drawString("Category: " + currentAppMeta.category, inset, y, 2); y += (int16_t)(20 * s);
 
         // Changelog or Description
         tftInstance->setTextColor(TFT_LIGHTGREY, TFT_DARKGREY);
@@ -543,7 +563,7 @@ void InstallerUI::drawActionDialog() {
 
         if (isUpdatingApp && currentAppMeta.changelog.length() > 0) {
             tftInstance->setTextColor(TFT_YELLOW, TFT_DARKGREY);
-            tftInstance->drawString("What's New:", inset, y, 2); y += 16;
+            tftInstance->drawString("What's New:", inset, y, 2); y += linePitch;
             tftInstance->setTextColor(TFT_LIGHTGREY, TFT_DARKGREY);
             desc = currentAppMeta.changelog;
         } else {
@@ -551,12 +571,17 @@ void InstallerUI::drawActionDialog() {
         }
 
         if (desc.length() > 0) {
-            // Simple line splitting every ~28 chars
+            // Three lines is what the panel had room for at 240x320; at a larger text scale the
+            // same panel holds fewer, and asking for three would run them under the buttons. The
+            // wrap width is a count of characters, so it comes from the panel width and the glyph
+            // width together -- 25 at 240x320, where the historical 28 already ran past the edge.
+            const int maxChars = (panel.w - 20 * s) / (8 * s);
+            int maxLines = (btnY - y) / linePitch;
+            if (maxLines > 3) maxLines = 3;
             int startIdx = 0;
-            int maxLines = 3;
             int lineCount = 0;
             while (startIdx < (int)desc.length() && lineCount < maxLines) {
-                int endIdx = startIdx + 28;
+                int endIdx = startIdx + maxChars;
                 if (endIdx >= (int)desc.length()) endIdx = desc.length();
                 else {
                     // Try to break at a space
@@ -564,7 +589,7 @@ void InstallerUI::drawActionDialog() {
                     if (spaceIdx > startIdx) endIdx = spaceIdx;
                 }
                 tftInstance->drawString(desc.substring(startIdx, endIdx), inset, y, 2);
-                y += 16;
+                y += linePitch;
                 startIdx = endIdx;
                 if (startIdx < (int)desc.length() && desc[startIdx] == ' ') startIdx++;
                 lineCount++;
@@ -573,31 +598,36 @@ void InstallerUI::drawActionDialog() {
 
         // Install and Cancel buttons
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->fillRoundRect(installBtn.x, installBtn.y, installBtn.w, installBtn.h, 4, TFT_GREEN);
+        tftInstance->fillRoundRect(installBtn.x, installBtn.y, installBtn.w, installBtn.h, (int32_t)(4 * s), TFT_GREEN);
         tftInstance->setTextColor(TFT_BLACK, TFT_GREEN);
         tftInstance->drawString(isUpdatingApp ? "Update" : "Install",
                                 installBtn.cx(), installBtn.cy(), 2);
 
-        tftInstance->fillRoundRect(cancelBtn.x, cancelBtn.y, cancelBtn.w, cancelBtn.h, 4, TFT_RED);
+        tftInstance->fillRoundRect(cancelBtn.x, cancelBtn.y, cancelBtn.w, cancelBtn.h, (int32_t)(4 * s), TFT_RED);
         tftInstance->setTextColor(TFT_WHITE, TFT_RED);
         tftInstance->drawString("Cancel", cancelBtn.cx(), cancelBtn.cy(), 2);
         return;
     } else if (installState == 5) { // Permission Review Dialog (Native C++)
-        const UiRect panel = m.dialogPanel(240);
-        const UiRect grantBtn = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 0, 2, 95, 10);
-        const UiRect denyBtn  = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 1, 2, 95, 10);
+        const UiRect panel = m.dialogPanel((int16_t)(240 * s));
+        const int16_t btnH = (int16_t)(30 * s);
+        const int16_t btnY = (int16_t)(panel.bottom() - 40 * s);
+        const UiRect grantBtn = m.dialogButtonSpaced(btnY, btnH, 0, 2, (int16_t)(95 * s), (int16_t)(10 * s));
+        const UiRect denyBtn  = m.dialogButtonSpaced(btnY, btnH, 1, 2, (int16_t)(95 * s), (int16_t)(10 * s));
 
-        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_DARKGREY);
+        tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_DARKGREY);
         tftInstance->setTextColor(TFT_GOLD, TFT_DARKGREY);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("App Permissions", panel.cx(), (int16_t)(panel.y + 20), 4);
+        tftInstance->drawString("App Permissions", panel.cx(), (int16_t)(panel.y + 20 * s), 4);
 
         tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
         tftInstance->setTextDatum(TL_DATUM);
-        int y = panel.y + 48;
-        tftInstance->drawString("Requires access to:", (int16_t)(panel.x + 10), y, 2); y += 18;
+        int y = (int16_t)(panel.y + 48 * s);
+        tftInstance->drawString("Requires access to:", (int16_t)(panel.x + 10 * s), y, 2); y += (int16_t)(18 * s);
 
-        for (size_t i = 0; i < currentAppMeta.permissions.size() && i < 5; i++) {
+        // As many permission rows as clear the buttons, up to the five the list can hold.
+        const int maxPermRows = (btnY - y) / (int16_t)(18 * s);
+
+        for (size_t i = 0; i < currentAppMeta.permissions.size() && i < 5 && (int)i < maxPermRows; i++) {
             String p = currentAppMeta.permissions[i];
             String desc = "• " + p;
             if (p == "network") desc = "• Network & Cloud APIs";
@@ -608,52 +638,55 @@ void InstallerUI::drawActionDialog() {
             else if (p == "ai") desc = "• KryonAI Engine";
 
             tftInstance->setTextColor(TFT_CYAN, TFT_DARKGREY);
-            tftInstance->drawString(desc, (int16_t)(panel.x + 12), y, 2);
-            y += 18;
+            tftInstance->drawString(desc, (int16_t)(panel.x + 12 * s), y, 2);
+            y += (int16_t)(18 * s);
         }
 
         // Grant & Install / Deny buttons
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->fillRoundRect(grantBtn.x, grantBtn.y, grantBtn.w, grantBtn.h, 4, TFT_GREEN);
+        tftInstance->fillRoundRect(grantBtn.x, grantBtn.y, grantBtn.w, grantBtn.h, (int32_t)(4 * s), TFT_GREEN);
         tftInstance->setTextColor(TFT_BLACK, TFT_GREEN);
         tftInstance->drawString("Grant", grantBtn.cx(), grantBtn.cy(), 2);
 
-        tftInstance->fillRoundRect(denyBtn.x, denyBtn.y, denyBtn.w, denyBtn.h, 4, TFT_RED);
+        tftInstance->fillRoundRect(denyBtn.x, denyBtn.y, denyBtn.w, denyBtn.h, (int32_t)(4 * s), TFT_RED);
         tftInstance->setTextColor(TFT_WHITE, TFT_RED);
         tftInstance->drawString("Deny", denyBtn.cx(), denyBtn.cy(), 2);
         return;
     }
 
     // Default Action Dialog (for regular files - non-app folders)
-    const UiRect panel = m.dialogPanelTop(160);
-    const int16_t btnY = (int16_t)(panel.y + 80);   // 120 at 240x320
-    tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, 8, TFT_DARKGREY);
+    const UiRect panel = m.dialogPanelTop((int16_t)(160 * s));
+    const int16_t btnY = (int16_t)(panel.y + 80 * s);   // 120 at 240x320
+    const int16_t btnH = (int16_t)(30 * s);
+    const int16_t btnW = (int16_t)(60 * s);
+    const int16_t btnGap = (int16_t)(10 * s);
+    tftInstance->fillRoundRect(panel.x, panel.y, panel.w, panel.h, (int32_t)(8 * s), TFT_DARKGREY);
     tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
     tftInstance->setTextDatum(MC_DATUM);
 
     String filename = selectedFile.substring(selectedFile.lastIndexOf('/') + 1);
-    tftInstance->drawString(filename, panel.cx(), (int16_t)(panel.y + 20), 2);
+    tftInstance->drawString(filename, panel.cx(), (int16_t)(panel.y + 20 * s), 2);
 
     bool isJS = filename.endsWith(".js");
 
     // Run Button (only show if it's a JS file)
     if (isJS) {
-        const UiRect runBtn = m.dialogButtonSpaced(btnY, 30, 0, 3, 60, 10);
-        tftInstance->fillRoundRect(runBtn.x, runBtn.y, runBtn.w, runBtn.h, 4, TFT_GREEN);
+        const UiRect runBtn = m.dialogButtonSpaced(btnY, btnH, 0, 3, btnW, btnGap);
+        tftInstance->fillRoundRect(runBtn.x, runBtn.y, runBtn.w, runBtn.h, (int32_t)(4 * s), TFT_GREEN);
         tftInstance->setTextColor(TFT_BLACK, TFT_GREEN);
         tftInstance->drawString("Run", runBtn.cx(), runBtn.cy(), 2);
     }
 
     // Install Button
-    const UiRect instBtn = m.dialogButtonSpaced(btnY, 30, 1, 3, 60, 10);
-    tftInstance->fillRoundRect(instBtn.x, instBtn.y, instBtn.w, instBtn.h, 4, TFT_BLUE);
+    const UiRect instBtn = m.dialogButtonSpaced(btnY, btnH, 1, 3, btnW, btnGap);
+    tftInstance->fillRoundRect(instBtn.x, instBtn.y, instBtn.w, instBtn.h, (int32_t)(4 * s), TFT_BLUE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->drawString("Install", instBtn.cx(), instBtn.cy(), 2);
 
     // Cancel Button
-    const UiRect cancelBtn = m.dialogButtonSpaced(btnY, 30, 2, 3, 60, 10);
-    tftInstance->fillRoundRect(cancelBtn.x, cancelBtn.y, cancelBtn.w, cancelBtn.h, 4, TFT_RED);
+    const UiRect cancelBtn = m.dialogButtonSpaced(btnY, btnH, 2, 3, btnW, btnGap);
+    tftInstance->fillRoundRect(cancelBtn.x, cancelBtn.y, cancelBtn.w, cancelBtn.h, (int32_t)(4 * s), TFT_RED);
     tftInstance->setTextColor(TFT_WHITE, TFT_RED);
     tftInstance->drawString("Cancel", cancelBtn.cx(), cancelBtn.cy(), 2);
 }
@@ -780,20 +813,25 @@ void InstallerUI::drawHelp() {
     // Help Text
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(TL_DATUM);
+    // A heading is followed by a 2px gap; the lines within a block are one body cell apart. Both
+    // follow the text scale, or at 2x the lines would sit on top of each other.
+    const int16_t s = (int16_t)m.scale;
+    const int16_t headPitch = (int16_t)(18 * s);
+    const int16_t bodyPitch = (int16_t)(16 * s);
     int y = m.list.y;
 
-    tftInstance->drawString("How to Install Apps:", m.list.x, y, m.fontBody); y += 18;
+    tftInstance->drawString("How to Install Apps:", m.list.x, y, m.fontBody); y += headPitch;
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString("1. Put app folder on SD.", m.list.x, y, m.fontBody); y += 14;
-    tftInstance->drawString("2. Folder needs app.json", m.list.x, y, m.fontBody); y += 14;
-    tftInstance->drawString("   and main.js inside.", m.list.x, y, m.fontBody); y += 14;
-    tftInstance->drawString("3. Tap [APP] to install.", m.list.x, y, m.fontBody); y += 14;
-    tftInstance->drawString("4. App appears in Home.", m.list.x, y, m.fontBody); y += 20;
+    tftInstance->drawString("1. Put app folder on SD.", m.list.x, y, m.fontBody); y += bodyPitch;
+    tftInstance->drawString("2. Folder needs app.json", m.list.x, y, m.fontBody); y += bodyPitch;
+    tftInstance->drawString("   and main.js inside.", m.list.x, y, m.fontBody); y += bodyPitch;
+    tftInstance->drawString("3. Tap [APP] to install.", m.list.x, y, m.fontBody); y += bodyPitch;
+    tftInstance->drawString("4. App appears in Home.", m.list.x, y, m.fontBody); y += (int16_t)(20 * s);
 
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("How to Update Apps:", m.list.x, y, m.fontBody); y += 18;
+    tftInstance->drawString("How to Update Apps:", m.list.x, y, m.fontBody); y += headPitch;
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString("1. Copy updated folder.", m.list.x, y, m.fontBody); y += 14;
+    tftInstance->drawString("1. Copy updated folder.", m.list.x, y, m.fontBody); y += bodyPitch;
     tftInstance->drawString("2. Install and overwrite.", m.list.x, y, m.fontBody);
 
     // Back Button Footer
@@ -822,10 +860,15 @@ void InstallerUI::handleTouch(uint16_t x, uint16_t y) {
         String filename = selectedFile.substring(selectedFile.lastIndexOf('/') + 1);
         bool isJS = filename.endsWith(".js");
 
+        // Every rect below is the one drawActionDialog painted, from the same numbers.
+        const int16_t s = (int16_t)m.scale;
+
         if (installState == 1) { // Overwrite Prompt
-            const UiRect panel  = m.dialogPanel(160);
-            const UiRect yesBtn = m.dialogButtonSpaced((int16_t)(panel.y + 100), 30, 0, 2, 70, 40);
-            const UiRect noBtn  = m.dialogButtonSpaced((int16_t)(panel.y + 100), 30, 1, 2, 70, 40);
+            const UiRect panel  = m.dialogPanel((int16_t)(160 * s));
+            const int16_t btnH  = (int16_t)(30 * s);
+            const int16_t btnY  = (int16_t)(panel.y + 100 * s);
+            const UiRect yesBtn = m.dialogButtonSpaced(btnY, btnH, 0, 2, (int16_t)(70 * s), (int16_t)(40 * s));
+            const UiRect noBtn  = m.dialogButtonSpaced(btnY, btnH, 1, 2, (int16_t)(70 * s), (int16_t)(40 * s));
             if (yesBtn.contains((int16_t)x, (int16_t)y)) { // Yes - overwrite
                 installSyntaxError = false;
                 installApiError = false;
@@ -847,8 +890,9 @@ void InstallerUI::handleTouch(uint16_t x, uint16_t y) {
             }
             return;
         } else if (installState == 2) { // Result
-            const UiRect panel = m.dialogPanel(200);
-            const UiRect okBtn = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 0, 1, 70, 0);
+            const UiRect panel = m.dialogPanel((int16_t)(200 * s));
+            const UiRect okBtn = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40 * s), (int16_t)(30 * s),
+                                                      0, 1, (int16_t)(70 * s), 0);
             if (okBtn.contains((int16_t)x, (int16_t)y)) { // OK
                 installState = 0;
                 showActionDialog = false;
@@ -862,9 +906,11 @@ void InstallerUI::handleTouch(uint16_t x, uint16_t y) {
             }
             return;
         } else if (installState == 3) { // App Info dialog
-            const UiRect panel = m.dialogPanel(240);
-            const UiRect installBtn = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 0, 2, 80, 30);
-            const UiRect cancelBtn  = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 1, 2, 80, 30);
+            const UiRect panel = m.dialogPanel((int16_t)(240 * s));
+            const int16_t btnH = (int16_t)(30 * s);
+            const int16_t btnY = (int16_t)(panel.bottom() - 40 * s);
+            const UiRect installBtn = m.dialogButtonSpaced(btnY, btnH, 0, 2, (int16_t)(80 * s), (int16_t)(30 * s));
+            const UiRect cancelBtn  = m.dialogButtonSpaced(btnY, btnH, 1, 2, (int16_t)(80 * s), (int16_t)(30 * s));
             if (installBtn.contains((int16_t)x, (int16_t)y)) { // Install clicked
                 bool defaultSD = FileSystem::exists("/local/config_install_sd.txt");
                 if (defaultSD && !FileSystem::exists("/sd/")) defaultSD = false;
@@ -898,9 +944,11 @@ void InstallerUI::handleTouch(uint16_t x, uint16_t y) {
             }
             return;
         } else if (installState == 5) { // Permission Review Dialog Touches
-            const UiRect panel = m.dialogPanel(240);
-            const UiRect grantBtn = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 0, 2, 95, 10);
-            const UiRect denyBtn  = m.dialogButtonSpaced((int16_t)(panel.bottom() - 40), 30, 1, 2, 95, 10);
+            const UiRect panel = m.dialogPanel((int16_t)(240 * s));
+            const int16_t btnH = (int16_t)(30 * s);
+            const int16_t btnY = (int16_t)(panel.bottom() - 40 * s);
+            const UiRect grantBtn = m.dialogButtonSpaced(btnY, btnH, 0, 2, (int16_t)(95 * s), (int16_t)(10 * s));
+            const UiRect denyBtn  = m.dialogButtonSpaced(btnY, btnH, 1, 2, (int16_t)(95 * s), (int16_t)(10 * s));
             if (grantBtn.contains((int16_t)x, (int16_t)y)) { // Grant clicked
                 saveAppPermissions(currentAppMeta.packageName, currentAppMeta.permissions);
 
@@ -938,11 +986,14 @@ void InstallerUI::handleTouch(uint16_t x, uint16_t y) {
         }
 
         // Default Action Dialog Touches (for regular files)
-        const UiRect filePanel = m.dialogPanelTop(160);
-        const int16_t fileBtnY = (int16_t)(filePanel.y + 80);   // 120 at 240x320
-        const UiRect runBtn    = m.dialogButtonSpaced(fileBtnY, 30, 0, 3, 60, 10);
-        const UiRect instBtn   = m.dialogButtonSpaced(fileBtnY, 30, 1, 3, 60, 10);
-        const UiRect cancelBtn = m.dialogButtonSpaced(fileBtnY, 30, 2, 3, 60, 10);
+        const UiRect filePanel = m.dialogPanelTop((int16_t)(160 * s));
+        const int16_t fileBtnY = (int16_t)(filePanel.y + 80 * s);   // 120 at 240x320
+        const int16_t fileBtnH = (int16_t)(30 * s);
+        const int16_t fileBtnW = (int16_t)(60 * s);
+        const int16_t fileBtnGap = (int16_t)(10 * s);
+        const UiRect runBtn    = m.dialogButtonSpaced(fileBtnY, fileBtnH, 0, 3, fileBtnW, fileBtnGap);
+        const UiRect instBtn   = m.dialogButtonSpaced(fileBtnY, fileBtnH, 1, 3, fileBtnW, fileBtnGap);
+        const UiRect cancelBtn = m.dialogButtonSpaced(fileBtnY, fileBtnH, 2, 3, fileBtnW, fileBtnGap);
 
         // Run clicked (only if JS)
         if (isJS && runBtn.contains((int16_t)x, (int16_t)y)) {

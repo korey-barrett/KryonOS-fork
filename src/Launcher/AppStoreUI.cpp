@@ -142,7 +142,7 @@ bool AppStoreUI::downloadFile(const String& url, const String& destPath, const S
     tftInstance->fillScreen(TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString(loadingMsg, m.centerX, (int16_t)(m.progressBar.y - 20), m.fontBody);
+    tftInstance->drawString(loadingMsg, m.centerX, (int16_t)(m.progressBar.y - 20 * m.scale), m.fontBody);
     tftInstance->drawRect(m.progressBar.x, m.progressBar.y, m.progressBar.w, m.progressBar.h, TFT_WHITE);
     tftInstance->present(); // the GET below blocks; this is the store's only loading draw
 
@@ -586,46 +586,56 @@ void AppStoreUI::drawAppInfo() {
     tftInstance->setTextDatum(MC_DATUM);
     tftInstance->drawString("App Details", m.header.cx(), m.headerTextY, m.fontBody);
     
+    // The label/value flow is pitched in glyph heights, which the text scale multiplies — 18px
+    // between a label and its value was one 16px glyph plus two, and at 2x text it would put the
+    // value on top of the label. Same for the description's own pitch. The wrap width is a count
+    // of characters, so it follows the box width and the glyph width together: 25 at 240x320.
+    const int16_t s = (int16_t)m.scale;
+    const int labelPitch  = 18 * s;
+    const int valuePitch  = 22 * s;
+    const int descPitch   = 16 * s;
+    const int maxChars    = (int)(m.list.w / (8 * s)) - 2;   // 8px per font-2 cell before the scale
+
     int y = m.list.y;
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(TL_DATUM);
 
-    tftInstance->drawString("Name:", m.list.x, y, m.fontBody); y += 18;
+    tftInstance->drawString("Name:", m.list.x, y, m.fontBody); y += labelPitch;
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString(app.name, m.list.x, y, m.fontBody); y += 22;
+    tftInstance->drawString(app.name, m.list.x, y, m.fontBody); y += valuePitch;
 
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Author:", m.list.x, y, m.fontBody); y += 18;
+    tftInstance->drawString("Author:", m.list.x, y, m.fontBody); y += labelPitch;
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString(app.author, m.list.x, y, m.fontBody); y += 22;
+    tftInstance->drawString(app.author, m.list.x, y, m.fontBody); y += valuePitch;
 
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Version:", m.list.x, y, m.fontBody); y += 18;
+    tftInstance->drawString("Version:", m.list.x, y, m.fontBody); y += labelPitch;
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString(app.version, m.list.x, y, m.fontBody); y += 22;
+    tftInstance->drawString(app.version, m.list.x, y, m.fontBody); y += valuePitch;
 
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     if (isUpdateMode) {
-        tftInstance->drawString("What's New:", m.list.x, y, m.fontBody); y += 18;
+        tftInstance->drawString("What's New:", m.list.x, y, m.fontBody); y += labelPitch;
     } else {
-        tftInstance->drawString("Description:", m.list.x, y, m.fontBody); y += 18;
+        tftInstance->drawString("Description:", m.list.x, y, m.fontBody); y += labelPitch;
     }
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    
+
     String desc = app.description;
     while(desc.length() > 0) {
-        int splitIdx = 25;
-        if(desc.length() <= 25) splitIdx = desc.length();
+        int splitIdx = maxChars;
+        if(desc.length() <= maxChars) splitIdx = desc.length();
         else {
-            int spaceIdx = desc.lastIndexOf(' ', 25);
+            int spaceIdx = desc.lastIndexOf(' ', maxChars);
             if(spaceIdx > 0) splitIdx = spaceIdx;
         }
         tftInstance->drawString(desc.substring(0, splitIdx), m.list.x, y, m.fontBody);
         desc = desc.substring(splitIdx);
         desc.trim();
-        y += 15;
+        y += descPitch;
     }
-    
+
     // Action Buttons
     const UiRect downloadBtn = m.dialogButton(m.dialogButtonRowY, 30, 0, 2, 80);
     const UiRect cancelBtn   = m.dialogButton(m.dialogButtonRowY, 30, 1, 2, 80);
@@ -653,7 +663,13 @@ void AppStoreUI::drawDialog() {
     
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     
-    // Split dialogMessage by '\n' and word-wrap lines if wider than 24 chars
+    // Split dialogMessage by '\n' and word-wrap lines if wider than the panel allows. The wrap
+    // count follows the panel width and the glyph width together, and the line pitch follows the
+    // text scale, so the block stays centred and readable at any size: 24 chars and 22px at 240x320.
+    const int16_t s = (int16_t)m.scale;
+    const int maxChars = (int)(m.w / (8 * s)) - 6;
+    const int linePitch = 22 * s;
+
     std::vector<String> lines;
     int start = 0;
     while (start < (int)dialogMessage.length()) {
@@ -661,28 +677,28 @@ void AppStoreUI::drawDialog() {
         String seg = (nextNl >= 0) ? dialogMessage.substring(start, nextNl) : dialogMessage.substring(start);
         start = (nextNl >= 0) ? nextNl + 1 : dialogMessage.length();
         seg.trim();
-        
+
         while (seg.length() > 0) {
-            if (seg.length() <= 24) {
+            if ((int)seg.length() <= maxChars) {
                 lines.push_back(seg);
                 break;
             }
-            int splitIdx = 24;
-            int spaceIdx = seg.lastIndexOf(' ', 24);
+            int splitIdx = maxChars;
+            int spaceIdx = seg.lastIndexOf(' ', maxChars);
             if (spaceIdx > 0) splitIdx = spaceIdx;
             lines.push_back(seg.substring(0, splitIdx));
             seg = seg.substring(splitIdx);
             seg.trim();
         }
     }
-    
+
     int numLines = lines.size();
     if (numLines == 0) numLines = 1;
-    int startY = (m.centerY - 25) - ((numLines - 1) * 11);
-    if (startY < 50) startY = 50;
+    int startY = (m.centerY - 25 * s) - ((numLines - 1) * (linePitch / 2));
+    if (startY < m.header.bottom() + 4) startY = m.header.bottom() + 4;
 
     for (size_t i = 0; i < lines.size(); i++) {
-        tftInstance->drawString(lines[i], m.centerX, startY + (i * 22), m.fontBody);
+        tftInstance->drawString(lines[i], m.centerX, startY + (i * linePitch), m.fontBody);
     }
 
     const UiRect okBtn = m.dialogButton((int16_t)(m.dialogButtonRowY - 10), 30, 0, 1, 70);
