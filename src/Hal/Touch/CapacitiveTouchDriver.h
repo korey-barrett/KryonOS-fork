@@ -55,6 +55,12 @@ protected:
 
     void setName(const char* name) { name_ = name; }
 
+    // The display this driver was initialised against. The panel-to-canvas mapping is the BACKEND's
+    // to own -- a backend that scales its canvas into a larger panel inverts that same transform
+    // here, so the touch path and the blit cannot describe different rectangles. Keeping it means
+    // this file holds no copy of the scale and offset to drift from the blit's.
+    KryonDisplay* display_ = nullptr;
+
     uint8_t address_;
     bool present_ = false;
 
@@ -101,6 +107,10 @@ public:
 protected:
     bool probe() override;
     bool readPoint(uint16_t* x, uint16_t* y) override;
+
+    // How many touches have logged their raw coordinates -- see readPoint(). Capped there, because
+    // this runs at touch rate and only the first few readings carry information.
+    uint8_t touchesLogged_ = 0;
 };
 
 #endif // KRYONOS_CAPACITIVE_TOUCH_DRIVER_H

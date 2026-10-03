@@ -1,6 +1,10 @@
 #include "Hal/Touch/CapacitiveTouchDriver.h"
 
 #include "Hal/Display/Display.h"
+// Display.h deliberately does not pull in the backend interface (ITouchDriver.h forward-declares
+// KryonDisplay so the resistive drivers can take a pointer without one), but toCanvas() below CALLS
+// panelToCanvas() on it, which needs the complete type.
+#include "Hal/Display/KryonDisplay.h"
 #include "Hal/I2C/I2CEngine.h"
 
 #if defined(TARGET_WAVESHARE_S3_LCD21B)
@@ -23,22 +27,39 @@ static void i2cTouchReset() {
 #endif
 }
 
-// Clamp a controller-native coordinate into the live canvas. Capacitive panels report in their own
-// native grid, which is usually but not always the canvas size; a value past the edge is clamped
-// rather than allowed to produce an out-of-bounds tap.
-static bool toCanvas(uint16_t nativeX, uint16_t nativeY, uint16_t* x, uint16_t* y) {
+// Map a controller-native coordinate onto the live canvas.
+//
+// On most boards the controller's grid IS the canvas and this is a clamp: a value past the edge is
+// pulled back rather than allowed to produce an out-of-bounds tap. But on a board whose canvas is
+// scaled into a larger panel -- the round Waveshare 2.1B, where a 240x320 canvas is blitted 6/5 into
+// a 480x480 circle -- the controller reports PANEL pixels, so a clamp alone would put every tap up
+// to 2x off. Those backends own the inverse via KryonDisplay::panelToCanvas, and this asks them for
+// it rather than keeping a second copy of the scale and offset that can drift from the blit's.
+static bool toCanvas(KryonDisplay* display, uint16_t nativeX, uint16_t nativeY, uint16_t* x,
+                     uint16_t* y) {
     const int16_t w = Display::width();
     const int16_t h = Display::height();
     if (w <= 0 || h <= 0) return false;
-    *x = (nativeX >= (uint16_t)w) ? (uint16_t)(w - 1) : nativeX;
-    *y = (nativeY >= (uint16_t)h) ? (uint16_t)(h - 1) : nativeY;
+
+    int32_t cx = nativeX;
+    int32_t cy = nativeY;
+
+    // A tap outside the drawn area is a REJECTION, not a clamp. Clamping it would turn the black
+    // ring around the canvas into a band of edge taps -- exactly the failure the aperture exists to
+    // fix -- because the bezel's pixels are the ones a finger misses by the most.
+    if (display && !display->panelToCanvas(nativeX, nativeY, &cx, &cy)) return false;
+
+    *x = (cx >= w) ? static_cast<uint16_t>(w - 1) : static_cast<uint16_t>(cx < 0 ? 0 : cx);
+    *y = (cy >= h) ? static_cast<uint16_t>(h - 1) : static_cast<uint16_t>(cy < 0 ? 0 : cy);
     return true;
 }
 
 // --- Shared lifecycle --------------------------------------------------------------------------
 
 void I2cTouchDriver::begin(KryonDisplay* display) {
-    (void)display; // capacitive panels report absolute pixels; nothing to draw or delegate
+    // Kept rather than discarded: toCanvas() asks it to invert the blit's transform. Null is
+    // tolerated -- the clamp above is then the whole mapping, which is correct for a 1:1 backend.
+    display_ = display;
 
 #if defined(KRYONOS_TOUCH_I2C_SDA) && defined(KRYONOS_TOUCH_I2C_SCL)
 #ifdef KRYONOS_TOUCH_I2C_ADDR
@@ -112,7 +133,7 @@ bool I2cTouchDriver::getTouch(uint16_t* x, uint16_t* y, uint16_t threshold) {
     (void)threshold;
     uint16_t nativeX = 0, nativeY = 0;
     if (!getTouchRaw(&nativeX, &nativeY)) return false;
-    return toCanvas(nativeX, nativeY, x, y);
+    return toCanvas(display_, nativeX, nativeY, x, y);
 }
 
 void I2cTouchDriver::calibrate(uint16_t* parameters, uint32_t color_fg, uint32_t color_bg,
@@ -196,20 +217,68 @@ bool Cst816Driver::probe() {
     // treated as present, since the family varies between S and T parts.
     if (!I2CEngine::ping(address_)) return false;
     const int id = I2CEngine::readReg(address_, 0xA7);
-    return id >= 0 && id != 0xFF;
+    if (id < 0 || id == 0xFF) return false;
+
+    // Stop the controller dropping into its low-power state between touches, which it otherwise does
+    // and in which it stops acknowledging I2C.
+    //
+    // The reference port for this board does this at init and we did not
+    // (D:\KryonOS .../waveshare_2_1/cst820.cpp begin(): writeReg(REG_DIS_AUTOSLEEP, 0x01)). Note what
+    // that port says about it: its reads are DELIBERATELY ungated on INT, because "the I2C traffic is
+    // itself the wake-up" -- so a sleeping part is woken by the very read that would find it asleep,
+    // and this write is not by itself the explanation for dead touch. It is here because the vendor
+    // sets it, and a part that never sleeps has fewer ways to be missed.
+    //
+    // Failure is ignored: a controller that refuses the write still answers reads, and probe() runs
+    // on a retry loop where a per-attempt line would flood.
+    if (!I2CEngine::writeReg(address_, 0xFE, 0x01)) {
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            Serial.println("[TOUCH] cst816 auto-sleep-off write (0xFE) refused; reads are ungated, harmless");
+        }
+    }
+    return true;
 }
 
 bool Cst816Driver::readPoint(uint16_t* x, uint16_t* y) {
-    const int count = I2CEngine::readReg(address_, 0x02);
-    if (count <= 0 || (count & 0x0F) == 0) return false;
+    // ONE burst from 0x02, and this is correctness rather than an optimisation.
+    //
+    // The five fields are a single snapshot of one touch sample, so reading them as five separate
+    // transactions lets the coordinates TEAR: the controller can finish a finger while the CPU is
+    // between reads, and X then comes from one sample and Y from the next. On this board that
+    // surfaced as raw reads like (1792, 0) -- off a 480 px panel entirely -- which the aperture guard
+    // correctly rejected, so the symptom was touch that was simply dead rather than visibly wrong.
+    //
+    // Both references agree, which is what makes this the bug rather than a guess: the port this
+    // board was written against reads the payload in one burst for exactly this reason
+    // (D:\KryonOS .../waveshare_2_1/cst820.cpp: "the 5-byte payload is read in one burst so the
+    // coordinates cannot tear between two I2C transactions"), and the vendor driver it was itself
+    // written against -- esp_lcd_touch_cst816s -- reads data_t through a single rx_param call.
+    // readRegBytes is the same repeated-start handshake they use, not a STOP followed by a read.
+    //
+    //   b[0] finger count   reg 0x02
+    //   b[1] X high nibble  reg 0x03
+    //   b[2] X low byte     reg 0x04
+    //   b[3] Y high nibble  reg 0x05
+    //   b[4] Y low byte     reg 0x06
+    std::vector<uint8_t> b;
+    if (!I2CEngine::readRegBytes(address_, 0x02, 5, b) || b.size() < 5) return false;
+    if ((b[0] & 0x0F) == 0) return false;
 
-    const int xh = I2CEngine::readReg(address_, 0x03);
-    const int xl = I2CEngine::readReg(address_, 0x04);
-    const int yh = I2CEngine::readReg(address_, 0x05);
-    const int yl = I2CEngine::readReg(address_, 0x06);
-    if (xh < 0 || xl < 0 || yh < 0 || yl < 0) return false;
+    const uint16_t rx = (uint16_t)(((b[1] & 0x0F) << 8) | b[2]);
+    const uint16_t ry = (uint16_t)(((b[3] & 0x0F) << 8) | b[4]);
 
-    *x = (uint16_t)(((xh & 0x0F) << 8) | xl);
-    *y = (uint16_t)(((yh & 0x0F) << 8) | yl);
+    // The first few touches report their raw coordinates, so a controller that is reporting
+    // something other than panel pixels says so in the boot log instead of presenting as dead
+    // touch. Capped, so it cannot flood at touch rate. Eight is the reference port's number.
+    if (touchesLogged_ < 8) {
+        touchesLogged_++;
+        Serial.printf("[TOUCH] cst816 raw=(%u,%u) num=%u\n", (unsigned)rx, (unsigned)ry,
+                      (unsigned)b[0]);
+    }
+
+    *x = rx;
+    *y = ry;
     return true;
 }
