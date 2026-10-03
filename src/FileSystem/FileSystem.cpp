@@ -69,10 +69,18 @@ bool FileSystem::init() {
     }
 
     // Initialize dedicated SPI bus for SD Card at runtime
-    // NOTE: key this off the *chip*, never off ARDUINO_USB_CDC_ON_BOOT. The Arduino core always
-    // defines that macro -- as 0 when USB CDC is off (cores/esp32/HardwareSerial.h) -- so testing it
-    // with a bare defined() compiles the ESP32-S3 pin map into classic-ESP32 builds.
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    //
+    // NOTE: this is a BOARD pin map, so it is keyed off the board's own TARGET_* macro and never off
+    // a chip macro. CONFIG_IDF_TARGET_ESP32S3 is defined for every ESP32-S3 build, so keying off it
+    // selected this generic map on the Waveshare 2.1B as well -- and pins 39/40/41 are that board's
+    // LCD VSYNC, DE and PCLK. Attaching FSPI to them tears down the RGB timing a few lines after the
+    // panel came up, which reads on hardware as "backlight on, nothing on screen". The board layer
+    // has its own initSD() for that reason; this macro is what let it be dead code.
+    //
+    // (Also never key this off ARDUINO_USB_CDC_ON_BOOT: the Arduino core always defines that macro --
+    // as 0 when USB CDC is off (cores/esp32/HardwareSerial.h) -- so a bare defined() would compile
+    // this map into classic-ESP32 builds.)
+#if defined(TARGET_ESP32S3_DEFAULT)
     pinMode(42, OUTPUT);
     digitalWrite(42, HIGH);    // De-select SD card CS during startup
     pinMode(39, INPUT_PULLUP); // Enable internal pull-up on MISO/DO for reliable card response
@@ -615,7 +623,8 @@ String FileSystem::getFileMD5(const char* path) {
 }
 
 bool FileSystem::mountSD() {
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    // Board pin map, not chip: see the note in init() for what these pins are on the Waveshare 2.1B.
+#if defined(TARGET_ESP32S3_DEFAULT)
     pinMode(42, OUTPUT);
     digitalWrite(42, HIGH);
     pinMode(39, INPUT_PULLUP);
