@@ -1,0 +1,116 @@
+# KryonOS on the ESP32-S31-Korvo-1 -- ESP-IDF v6.1
+#
+# Seeded from the working reference project for this board (D:\esp32s31_korvo1), which is the only
+# proven configuration for this silicon, and pruned to what KryonOS needs. Values that look odd
+# carry a comment saying why -- several of them are the difference between booting and not.
+
+CONFIG_IDF_TARGET="esp32s31"
+
+# --- Flash -------------------------------------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# --- Partition table ---------------------------------------------------------------------------
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x9000
+
+# --- Build -------------------------------------------------------------------------------------
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# GCC 12+ promotes a number of warnings to errors. Vendored C (Duktape and its regexp engine) trips
+# these and cannot be fixed without editing upstream sources, which this fork does not do.
+CONFIG_COMPILER_DISABLE_GCC12_WARNINGS=y
+CONFIG_COMPILER_DISABLE_GCC13_WARNINGS=y
+CONFIG_COMPILER_DISABLE_GCC14_WARNINGS=y
+CONFIG_COMPILER_DISABLE_GCC15_WARNINGS=y
+
+# Demotes some of the -Werror pressure from third-party code, and it is worth being precise about
+# which part, because it is easy to assume it does more than it does.
+#
+# IDF implements this (CMakeLists.txt:232) by rewriting bare `-Werror` into `-Werror=all`. Warnings
+# belonging to -Wall therefore stay fatal; warnings from -Wextra and elsewhere stop being fatal.
+#
+# That is half of what this build needs. arduino-esp32 trips -Wmissing-field-initializers, which is a
+# -Wextra warning and so is covered here. It also trips -Wstringop-truncation, which is a -Wall
+# warning and is NOT covered -- that one is handled by an explicit flag in idf/CMakeLists.txt. Both
+# are required; neither alone is sufficient. Verified by building with each in turn.
+#
+# Our own sources keep -Wall errors, which is the part worth keeping.
+CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
+
+# --- PSRAM: 16 MB, octal, 200 MHz --------------------------------------------------------------
+# Both RGB framebuffers and the KryonOS canvas live here, so this is not optional.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_200M=y
+
+# Execute-in-place from PSRAM would free IRAM and keep code running while the flash cache is off,
+# but IDF v6.1 has a linker-script bug with it ("cannot move location counter backwards"). The
+# reference project measured this and left it off. Do not enable it until the bug is fixed.
+# CONFIG_SPIRAM_XIP_FROM_PSRAM is not set
+
+# Moving .bss into PSRAM frees ~118 KB of internal DRAM, which is tempting on this board, but the
+# WiFi PHY calibration runs with the flash cache disabled and touching PSRAM .bss there raises a
+# fatal cache access error. If internal RAM runs short later, move individual objects with
+# EXT_RAM_BSS_ATTR instead of flipping this.
+# CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY is not set
+
+# --- CPU / RTOS --------------------------------------------------------------------------------
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=320
+# 1000 Hz, not IDF's 100 Hz default: the display present path and the touch poll both schedule in
+# single-digit milliseconds and a 10 ms tick quantises them into visible jitter.
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
+
+# --- mbedTLS: PSK modes, which arduino-esp32 requires rather than merely supports -----------------
+# This one is not a preference and it is not obvious from either side.
+#
+# arduino-esp32 4.x's NetworkClientSecure compiles ssl_client.cpp -- the file that actually
+# implements TLS for WiFiClientSecure -- inside
+#     #if !defined(MBEDTLS_KEY_EXCHANGE__SOME__PSK_ENABLED) && !defined(MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED)
+#         #warning "Enable pre-shared-key ciphersuites ..."
+#     #else ... whole file ... #endif
+# so with PSK modes off, that translation unit builds to an EMPTY object and every symbol it owns
+# (start_ssl_client, stop_ssl_socket, send_ssl_data, get_ssl_receive, ssl_init, ...) is missing.
+#
+# What that looks like without this line is a LINK failure, not a TLS failure, and only once
+# something actually references WiFiClientSecure -- which on KryonOS is KryonHttpClient. The build is
+# otherwise clean, so nothing before the final link hints at it.
+#
+# MBEDTLS_KEY_EXCHANGE_SOME_PSK_ENABLED is derived from this option; there is no separate switch.
+# Enabling it makes PSK ciphersuites available to mbedTLS, which is a slightly wider negotiation
+# surface than strictly needed -- but arduino-esp32 offers no narrower way to get a working
+# WiFiClientSecure, and HTTPS is part of the fork's feature set (the app store and cloud services).
+CONFIG_MBEDTLS_PSK_MODES=y
+
+# --- Arduino as an ESP-IDF component -----------------------------------------------------------
+# Lets the core start setup()/loop() itself. Without it this project would own app_main and pump the
+# Arduino runtime by hand -- but KryonOS's entry point is a plain setup()/loop() pair, so owning the
+# task here would mean rewriting main.cpp for the board rather than reusing it.
+CONFIG_AUTOSTART_ARDUINO=y
+# KryonOS's loop() drives the UI and the JS runtime, not a sketch. Measured in internal RAM.
+CONFIG_ARDUINO_LOOP_STACK_SIZE=8192
+
+# --- Board Support Package (espressif/esp32_s31_korvo_1) ----------------------------------------
+# These are the BSP's own display knobs, and the values are copied from the reference project for
+# this board rather than chosen: they are the ones measured to work on this silicon, and the panel
+# timings they feed are the one part of the board port that cannot be guessed.
+
+# Bounce buffer mode is effectively mandatory here, not a tuning choice. A full 800x480x2 PSRAM
+# framebuffer needs ~188 DMA descriptors in INTERNAL RAM, which is not available once WiFi/BT have
+# taken their share; bounce mode streams through small internal buffers and needs ~3. Without it the
+# RGB panel fails to start outright.
+CONFIG_BSP_LCD_RGB_BOUNCE_BUFFER_MODE=y
+CONFIG_BSP_LCD_RGB_BOUNCE_BUFFER_HEIGHT=5
+
+# Two frame-size buffers, matching the reference. KryonOS brings its own canvas and dirty-rect
+# present path on top of this, so the BSP's second buffer is redundant for us and costs 768 KB of
+# PSRAM that is otherwise free. Left at the verified value through M1b; M2 revisits it once the panel
+# handle is actually in use and the redundancy is measurable rather than assumed.
+CONFIG_BSP_LCD_RGB_BUFFER_NUMS=2
+
+# LVGL's anti-tearing mode is deliberately NOT enabled. It only has meaning for LVGL's own render
+# loop, and KryonOS does not use LVGL -- enabling it would have the BSP fight our present path for
+# the buffers.
+# CONFIG_BSP_DISPLAY_LVGL_AVOID_TEAR is not set

@@ -1,0 +1,22 @@
+# KryonOS partition table for the ESP32-S31-Korvo-1 (16 MB flash).
+#
+# Two OTA slots from the outset, even though only OTA-free flashing works today: the offsets are
+# the expensive thing to change later (they invalidate every flashed image and any data partition
+# already written on a board), while an unused second slot costs nothing but flash.
+#
+# Name,     Type, SubType, Offset,   Size,   Flags
+nvs,        data, nvs,     ,          0x6000,
+otadata,    data, ota,     ,          0x2000,
+phy_init,   data, phy,     ,          0x1000,
+ota_0,      app,  ota_0,   ,          6M,
+ota_1,      app,  ota_1,   ,          6M,
+# KryonOS keeps its internal filesystem on LittleFS. The subtype is spelled `spiffs` because that is
+# the IDT subtype esp_littlefs registers against; it is a marker for the FS driver, not a claim
+# about the on-flash format.
+#
+# The LABEL must be `spiffs` too, and for a separate reason: FileSystem::init() calls
+# LittleFS.begin(true) with no partition argument, so arduino-esp32 looks the volume up by its
+# default label, which is `spiffs`. Every PlatformIO environment gets that for free -- they use
+# PlatformIO's default_16MB.csv, whose filesystem partition is labelled `spiffs`. This table is
+# hand-written, so the label is ours to get right, and calling it anything else mounts nothing.
+spiffs,     data, spiffs,  ,          3M,

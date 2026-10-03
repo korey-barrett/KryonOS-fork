@@ -1,0 +1,34 @@
+dependencies:
+  idf:
+    version: ">=6.1,<6.2"
+
+  # Arduino as an ESP-IDF component. This is what makes KryonOS's existing source tree usable on the
+  # S31 at all: the alternative is rewriting ~31k lines against raw IDF APIs, which is a different
+  # project, not a port.
+  #
+  # Pinned to the release candidate because 4.0.0-rc1 is the ONLY arduino-esp32 that carries the
+  # esp32s31 target. Stable 3.3.x does not have it, so this is not a preference -- it is the reason
+  # the Arduino core version moves at all. It is a pre-release, hence the explicit pin rather than a
+  # caret range: a silent bump to a different RC would move the API underneath us.
+  espressif/arduino-esp32:
+    version: "4.0.0-rc1"
+
+  # Espressif's own BSP for this board. This is the whole point of moving to the Korvo-1: the RGB
+  # panel pins, timings, PCLK, DMA burst settings and endianness are the vendor's numbers, and the
+  # touch controller is a vendor driver rather than a reverse-engineered register map.
+  #
+  # Pinned by exact version, not a caret range, because the BSP is the source of the board's most
+  # fragile constants (the panel timings) and 1.0.0~1 is the version those constants were verified
+  # against on real silicon.
+  #
+  # It drags in more than we use -- esp_video, esp_codec_dev, led_indicator, button, usb and LVGL via
+  # esp_lvgl_port. Nothing calls them; the cost is build time and flash, and there is 16 MB of flash
+  # with the app slot at 96% free. Isolating that cost is half the reason M1b exists.
+  espressif/esp32_s31_korvo_1:
+    version: "1.0.0~1"
+
+  # Declared here as well as inside the BSP because the BSP marks it `public: false`: its headers are
+  # not transitive, so without this line main cannot call esp_lcd_touch_read_data(). This is the
+  # component that also supplies esp_lcd_touch.h itself.
+  espressif/esp_lcd_touch_gt1151:
+    version: "*"
