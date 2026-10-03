@@ -1,0 +1,44 @@
+# Remove the SD card before an in-place (OTA) update
+
+This is the `main` branch of [korey-barrett/KryonOS-fork](https://github.com/korey-barrett/KryonOS-fork).
+It carries the source and the `esp32` variant's manifest at `updates/esp32/v2/update.json`. The
+other chip variants publish their own manifests on their own branches (`esp32s3`, `esp32s31`), so a
+device reads the manifest on the branch matching its chip.
+
+## The workaround
+
+**Remove the SD card from the board before starting an update.**
+
+A mounted SD volume is allocated out of the same internal heap the updater needs. Arduino's
+`UpdateClass::begin()` allocates a 4096-byte sector buffer at a point where the download's TLS
+session to the firmware server is already open. When that allocation fails the updater reports it
+as `Err #0`, because that path leaves `_error` at `UPDATE_ERROR_OK` -- so the device shows
+
+```
+Flash Init Failed: Err #0
+```
+
+and nothing in the message says why. The update cannot start.
+
+Measured on `esp32-cyd-28` (classic ESP32, 4 MB flash, `min_spiffs`), KryonOS 2.0.1:
+
+| SD card | Result |
+| --- | --- |
+| inserted | `Update.begin()` fails: `Flash Init Failed: Err #0` |
+| removed | the same firmware updates in place and boots onto 2.0.2 |
+
+Nothing else changed between those two runs.
+
+## This may not be specific to this fork
+
+`src/Kernel/Services/OTA/OTAManager.cpp` on this fork is upstream's file with a single expression
+changed -- the manifest URL. The allocation that fails is in the Arduino core, and the ordering
+that places it after the TLS session is upstream's. The same failure may therefore occur in the
+upstream repository. That has not been tested here.
+
+## Status
+
+The fork's storage layer now releases the SD volume for the duration of a flash update
+(`FileSystem::suspendSD()` / `resumeSD()`, called around `startFlashUpdate()` in
+`src/Settings/SettingsUI.cpp`). It is not yet confirmed on hardware, so removing the card stays the
+reliable workaround until it is.
