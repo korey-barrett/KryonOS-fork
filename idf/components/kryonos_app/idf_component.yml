@@ -1,0 +1,14 @@
+dependencies:
+  idf:
+    version: ">=6.1,<6.2"
+
+  # The fork's JSON layer. On PlatformIO this arrives through lib_deps; on the IDF side it has to be a
+  # managed component, and ArduinoJson is published to the registry under its author for exactly this.
+  # Version 7 rather than a caret on 6: Arduino 4.x's bundled examples and the fork both use the v7 API
+  # (JsonDocument, no StaticJsonDocument), so pinning the major is what keeps the two in step.
+  #
+  # Note this is the ONLY one of the fork's four lib_deps that has a component-registry equivalent.
+  # ESPAsyncWebServer and WebSockets are Arduino-only and are the two the plan flags; they are the next
+  # wall after this one, not part of it.
+  bblanchon/arduinojson:
+    version: "^7"
