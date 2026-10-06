@@ -15,6 +15,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [2.0.2] - 2026-10-03
+
+### Added
+- **Multi-Board Display Abstraction (`KryonDisplay`)**:
+  - The UI now draws through an abstract `KryonDisplay` reference instead of a TFT_eSPI object, so the panel driver is a build-flag choice (`KRYONOS_DISPLAY_BACKEND`). `tft` is now `extern KryonDisplay&`.
+  - `TftEspiDisplay` is the default adapter; it derives from both TFT_eSPI and `KryonDisplay`, so the concrete object keeps the whole TFT_eSPI API (sprites, DMA, `readRect`) while satisfying the interface.
+  - `RamFramebufferDisplay` is a reference software rasterizer sharing no code with TFT_eSPI, which is what proves the seam. It embeds no font, so text is measured but not painted.
+- **RGB Parallel Display Backend for the Waveshare ESP32-S3-Touch-LCD-2.1B** (`KRYONOS_BACKEND_RGB`):
+  - Drives a 480x480 ST7701 on a 16-bit RGB565 parallel bus — a panel TFT_eSPI cannot drive — keeping TFT_eSPI compiled as a pure software rasterizer into a full-screen PSRAM sprite that is blitted through `esp_lcd_panel_draw_bitmap`. This keeps the glyphs, metrics and `UiLayout` geometry pixel-identical to the SPI boards.
+  - The panel is a **circle**, so the logical canvas (240x320) is scaled 6/5 into a 288x384 rect whose corners land exactly on the bezel; `BOARD_PANEL_W`/`_H` in the board header holds the scan size the ST7701 timings come from.
+  - The TCA9554 I2C expander is extracted into `src/Hal/I2C/Tca9554` and shared by the display and touch paths, with a write shadow that only advances on ACK.
+  - **Preview:** this backend has never run on hardware. Its pins, timings, init table and expander masks were checked field-for-field against the vendor's `board_devices.yaml` and the Waveshare wiki, which agree independently.
+- **Pluggable Touch Drivers (`ITouchDriver`)**:
+  - The single touch class becomes a facade over `Xpt2046BitbangDriver`, `Xpt2046TftDriver`, `Ft6236Driver`, `Gt911Driver`, `Cst816Driver` and `NullTouchDriver`, selected by `KRYONOS_TOUCH_DRIVER` (unset is `auto`, which reproduces the previous compile-time ladder exactly). Naming a driver whose pins a board does not have falls back to null rather than reading unconnected pins.
+  - `TouchCalibration.h` holds the calibration tuple and the raw-to-pixel math in an Arduino-free header, so the firmware and the off-device preview tool share one mapping.
+  - `needsCalibration()` gates the calibration screen, so an absolute-position or absent panel skips it and `/touch_cal_p.bin` is never consulted.
+  - The capacitive drivers are register-level and **untested against hardware**. The Waveshare's CST820 answers to the CST816S register map, so it binds `Cst816Driver` unchanged — but that panel has not been run either.
+- **Arbitrary-Resolution Canvas and `UiLayout`**:
+  - Panel size and orientation are build-time configuration (`KRYONOS_DISPLAY_WIDTH` / `_HEIGHT` / `_ROTATION`, with `DISP_HOR_RES` / `DISP_VER_RES` honoured as aliases) rather than a constant; `Display` is the runtime source of truth, snapshotted after rotation.
+  - `UiLayout::compute(w, h)` returns the frame, header, list, footer, scrollbar, dialog, keyboard and notification metrics every screen draws from. `compute(240, 320)` reproduces the historical geometry exactly, and golden tests pin it.
+  - Every screen — Launcher, App Store, Installer, Help Center, Settings, keyboard, notifications, Web Server, KryonCloud and the boot path — derives both its draw rects and its touch hit rects from those metrics, so a tap hits what was drawn at any resolution.
+  - `uiScale(w, h)` = `min(w, h) / 240` clamped to `[1, 3]` scales the whole layout to a larger panel, and `KRYONOS_KB_*` lets a board declare its own keyboard grid shape (key width is fixed by the column count, so finger-sized keys need fewer, wider columns rather than scaling).
+  - `tools/preview` renders the same layout model off-device to HTML/SVG.
+- **ESP32-S31-Korvo-1 Board Profile** *(preview)*:
+  - Espressif's own `esp32_s31_korvo_1` BSP supplies the display and touch rather than a hand-rolled panel config, which is the point of using the BSP: it already carries the verified pin and timing table for this silicon.
+  - Two of the board's pins are NC in the BSP, and both change a decision: `BSP_LCD_BACKLIGHT` is `GPIO_NUM_NC`, so `setBacklight()` brightness returns `ESP_ERR_NOT_SUPPORTED` rather than pretending (a dark panel is never misread as a dim one), and `BSP_LCD_TOUCH_INT` is `GPIO_NUM_NC`, so the GT1158 has no interrupt line and polls.
+- **ESP-IDF v6.1 Build for the ESP32-S31**:
+  - The S31 is only reachable from arduino-esp32 4.0.0-rc1, which is IDF 6.x, which the pioarduino `espressif32` platform does not carry — so the board gets a CMake project of its own under `idf/`. `platformio.ini` and its three environments are untouched and still build.
+  - `kryonos_app` is the only place the fork's `src/` tree is listed, so the IDF and PlatformIO builds cannot disagree about what the project is. `kryonos_s31_display` supplies the rasterizer the BSP does not (it hands back a panel handle and `esp_lcd_panel_draw_bitmap` and stops there).
+  - AsyncTCP, ESPAsyncWebServer and WebSockets are vendored as IDF components at the same versions the PlatformIO environments resolve, so the two build systems cannot drift onto different sources of the same library.
+  - Font data is vendored verbatim from TFT_eSPI so the Korvo-1 renders text pixel-identical to the other boards and `textWidth()` reports the same numbers.
+- **Fork-Hosted OTA**:
+  - The firmware's OTA manifest URL now points at the fork's per-variant branches (`esp32`, `esp32s3`, `esp32s31`) instead of upstream, and release **v2.0.2** is published from the fork. Previously every board in the fork's manifest was `supports_ota: false`, so no in-place update path existed anywhere.
+- **CYD In-Place OTA**:
+  - `esp32-cyd-28` moves to `min_spiffs.csv` — two 1,966,080-byte app slots — and becomes the only 4 MB target here that updates over the air. The app fits via two levers, neither sufficient alone: both embedded web pages are gzipped at build time by `scripts/gzip_web_assets.py`, and the never-taken DWARF unwind tables are stripped. `firmware.bin` lands at 1,830,176 bytes, 135,904 under the slot, with no feature gated off.
+- **Off-Device Layout Preview (`tools/preview`)**:
+  - Renders the `UiLayout` model to HTML/SVG without hardware, with golden tests pinning 240x320 to the legacy values.
+
+### Changed
+- **Cryptography moved to PSA Crypto**: MD5, SHA-256, SHA-512, HMAC-SHA256 and AES-CBC now go through PSA, so there is one implementation across IDF 5.x and 6.x rather than a per-core split. mbedTLS 4.x (IDF 6.1) moved the per-algorithm headers under its private directory. AES-CBC uses the multipart API with an explicit `psa_cipher_set_iv()`, because the one-shot would generate its own random IV and prepend it, leaving the IV stored in the JSON envelope unused and every decrypt failing. Every failure path returns empty rather than a partial result, and the cloud download's checksum fails **closed**.
+- **One default board per chip type** (`esp32-default`, `esp32s3-default`, `esp32s31-default`). Upstream's CYD / T-HMI / Cardputer ports move to `src/Hal/Boards/board_configs/examples/` as unbuilt reference snippets. Board guards are now positive `TARGET_*` macros.
+- **SD access routes to the volume the card is actually mounted on** rather than always the SPI `SD` object, which a board with an SDMMC slot never mounts — its paths previously "worked" by failing quietly, and the app scan reported an empty card on a card that was present.
+- **The SD pin map is keyed off the board, not the chip.** `CONFIG_IDF_TARGET_ESP32S3` is defined for every ESP32-S3 build, so the generic map attached FSPI to the Waveshare's LCD VSYNC / DE / PCLK pins and tore down the RGB timing moments after the panel came up.
+- **Wi-Fi scans are capped at 15 seconds** instead of Arduino's 60-second `_scanTimeout` default. `smartAutoConnect()` scans synchronously and is called from both `WiFiManager::init()` and the Settings touch handler, so the default was the difference between a few seconds and a pinned UI with no way out but reset.
+- **The board id has one source of truth** (`KRYONOS_BOARD_ID`) across the firmware, CI and the OTA manifest, which previously named boards that no longer exist.
+
+### Fixed
+- **Frames drawn inside blocking calls now reach the panel.** `main.cpp::loop()` was the only thing that flushed a frame, so anything drawn by a callee that then blocked — a load stage, scan, fetch, install or OTA download — arrived only as whatever cache lines happened to be evicted, showing as horizontal streaks over the text.
+- **Filled round rectangles no longer lose their right-hand corners in the RAM framebuffer backend.** `fillRoundRect()` filled its corner squares through `circleHelper(filled=true)`, which anchors every chord on the circle's centre column; that is right for a whole circle but not for a quadrant, so the outer half of each corner went unpainted.
+- **Taps land where they were aimed on a scaled panel.** Once the canvas is scaled into the aperture, raw panel coordinates are no longer canvas coordinates and every tap landed at 5/6 of its target, drifting further from the centre — easy to misread as a calibration fault, since the centre of the screen still worked.
+- **The Korvo-1's RGB panel rasterizes into the panel's own frame buffer** instead of a bounce buffer. In bounce mode the driver tracks its place in the frame in a software counter that only advances when a refill interrupt beats the DMA; miss that deadline once — a flash write or a WiFi burst is enough — and every later slice is offset permanently, silently, and differently on every boot. Refresh-auto mode restarts the DMA at row 0 each frame, so the scanout position lives in hardware and a stall can corrupt at most one frame. It also removes a second full-size copy of the canvas, at the cost of an `esp_cache_msync` in `present()`.
+- **Frames grow with the text on larger panels**, and the whole layout scales with the panel rather than only its proportions.
+- **OTA on the CYD no longer fails with `Flash Init Failed: Err #0`.** Arduino's `UpdateClass::begin()` allocates a 4096-byte sector buffer after the download's TLS session is already open, and reports a failed allocation as `Err #0`, which leaves `_error` at `UPDATE_ERROR_OK`. A mounted SD volume is allocated from the same internal heap and is enough to push it over. `FileSystem::suspendSD()` / `resumeSD()` release the volume around the flash; **until that is confirmed on hardware, removing the SD card before an update stays the reliable workaround.**
+
+### Breaking
+- **The CYD's partition table changes** from `huge_app.csv` to `min_spiffs.csv`. Two one-time consequences follow, both because OTA cannot deliver a partition table: LittleFS drops from 896 KB to 128 KB, and the first wire flash orphans its contents — including `/local/web_on.txt`, so the web server toggle resets itself. The CYD must be flashed over USB once before in-place updates work at all. `nvs` stays at `0x9000` in both tables, so WiFi credentials and KryonCloud pairing survive.
+
+---
+
 ## [2.0.1] - 2026-10-01
 
 ### Added
