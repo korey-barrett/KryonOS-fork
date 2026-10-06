@@ -363,8 +363,12 @@ Recorded as memory files under
 
 - `esp32-default` could regain OTA with the same gzip lever — with `huge_app` it overflowed
   `min_spiffs` by only 1,493 bytes. Now that both levers exist, the numbers are worth re-measuring.
-- The `unsupported_ota_guide` default in `push-update.yml:54` still points at upstream's flasher
-  (`kryonos.harislab.tech/flasher`); it could point at the fork's Releases page.
+- The `unsupported_ota_guide` default in `push-update.yml:58` already points at the fork's Releases
+  page, not upstream's flasher. Nothing to do; noted because an earlier capture claimed otherwise.
+- `push-update.yml` defaults `ota_esp32_default: true` while the published `esp32` manifest carries
+  `supports_ota: false` for that board — the `huge_app` table has one app slot. The default is only
+  what pre-fills the dispatch form, so it is a foot-gun rather than a bug; flipping it to `false`
+  would match what has actually been published.
 - `src/Kernel/Services/Network/TLSCerts.h` is dead code worth 0 bytes — nothing includes it. Hygiene
   only.
 - `UiLayout::dialogButtonSpaced()` emits off-canvas rects for any canvas narrower than the caller's
