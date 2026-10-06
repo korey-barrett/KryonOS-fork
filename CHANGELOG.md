@@ -74,6 +74,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   every filled round rect: a hollow link on each keypad key, a notch in the launcher's red exit
   button. The corners are now filled row by row with the exact chord, as the other backend does.
   This is the artifact reported against the Korvo-1, on the one backend that never got that fix.
+- **The Time & Region screen's UP and DN footer keys work.** Its main branch handled only
+  `UI_FOOTER_SEL`, so the two keys the page draws for itself did nothing. `drawTimeSettings()`
+  renders UP / BACK / DN whenever `actionCount > timeBtnPerPage()`, and on the 201x268 canvas that
+  is four actions against a page of two — while at 240x320 all four fitted, the footer was a plain
+  BACK, and the missing cases never showed. `timeActionScroll` was already declared, drawn from and
+  clamped; nothing could move it. The branch now handles all three thirds, as the timezone picker
+  beside it already did.
 
 ---
 

@@ -1862,8 +1862,22 @@ void SettingsUI::handleTimeTouch(uint16_t x, uint16_t y) {
         }
     }
 
-    if (m.inFooter((int16_t)y) && m.footerButtonFromX((int16_t)x) == UI_FOOTER_SEL) {
+    // The option stack scrolls, and drawSettingsFooterScroll draws UP / BACK / DN whenever it does
+    // (four actions do not fit this board's 268px canvas, so it does), which means all three thirds
+    // have to be live here. Only SEL used to be handled, leaving the two keys the page had just
+    // drawn for itself dead. At 240x320 all four actions fitted, the footer was a plain BACK, and
+    // the gap never showed.
+    if (!m.inFooter((int16_t)y)) return;
+    switch (m.footerButtonFromX((int16_t)x)) {
+    case UI_FOOTER_UP:
+        if (timeActionScroll > 0) { timeActionScroll--; drawTimeSettings(); }
+        break;
+    case UI_FOOTER_DN:
+        if (timeActionScroll < actionCount - perPage) { timeActionScroll++; drawTimeSettings(); }
+        break;
+    default: // UI_FOOTER_SEL -- BACK
         currentState = 1; // STATE_SETTINGS
+        break;
     }
 }
 
