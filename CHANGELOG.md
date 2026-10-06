@@ -15,6 +15,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **The Waveshare 2.1B's UI is 1.2x larger.** Its canvas moves from 240x320 to **201x268** and its
+  aperture scale from 6/5 to **96/67**, so the same 288x384 rect lands on the glass with everything
+  inside it magnified: body text 19 px -> 23 px, list rows 36 px -> 43 px, header and footer bars 36 px
+  -> 43 px tall, footer UP/DN 36 px -> 43 px tall, and the launcher list falls from 7 rows to 5.
+  - Two build flags plus two constants carry the enlargement — `KRYONOS_DISPLAY_WIDTH`/`_HEIGHT` in
+    `platformio.ini` and `SCALE_NUM`/`SCALE_DEN` in `EspLcdRgbDisplay.h`. **No screen's layout code is
+    touched by that**, because a 3:4 canvas puts the blitted rect on 288x384 at *every* size and
+    `uiScale(201, 268)` is still 1. A smaller canvas magnifies the UI rather than shrinking it. The
+    shorter canvas does break one screen that sizes itself off a 320 px height, though — see
+    KryonCloudUI under Fixed below.
+  - 201 is the narrowest canvas the screens tolerate: `InstallerUI`'s three-button row spans
+    `3*60 + 2*10 = 200` px and `UiLayout::dialogButtonSpaced()` centres that run, so the outer two
+    buttons hang off both edges below it. Narrowing further means narrowing those call sites first.
+  - 268 keeps every `h < 240` fallback on its normal path — the 42 px notification card, the OTA title
+    font and the keyboard chrome. It does cross KryonCloudUI's own threshold, which keys off 320.
+- **The on-screen keyboard keys grow with it, via a board-declared compact chrome**
+  (`KRYONOS_KB_COMPACT_CHROME`). Key width on the glass is `288 / columns` and is therefore fixed at
+  48 px for this board's 6 columns, but key height is `(h - kbGridTop) / rows`, and the chrome's
+  fixed 110 px stack does not shrink with the canvas — at 268 tall it would have left the six rows
+  26 px each. Claiming the layout's existing compressed chrome (grid top 72) gives them 32 px, i.e.
+  **47x46 px keys against the previous 48x42**, instead of 47x37. The flag is 0 on every other board,
+  so the `h < 240` test compiles to the identical expression there.
+
+### Fixed
+- **The KryonCloud screens no longer squeeze their text out of its frames on a canvas shorter than
+  320 px.** `KryonCloudUI` lays its cards out in 240x320 literals and scales them to the canvas, but
+  the scale was a *quantized half step* — `2 * h / 320`, which is 2 at 240x320 and 3 at 800x480 — so
+  for any canvas under 320 it fell to 1 and put every frame at **half** height, while the glyph it
+  holds stayed a fixed 16 px cell. `cvh()`'s floor, which exists to prevent exactly that, was
+  `2 * m.scale` (2 px) rather than a glyph, so it never caught it. On the 201x268 canvas that left a
+  22 px pill 11 px tall and a 20 px toast 10 px tall around 16 px type — read on the panel as lines
+  piled on top of each other. `cv()` is now proportional (`v * h / 320`, capped at `v * m.scale`) and
+  `cvh()`'s floor is the reference layout's own smallest font-2 frame, 20 px. Both are bit-identical
+  at 240x320 and at the Korvo-1's 800x480 (`v` and `v * 3/2` respectively), so nothing but a sub-320
+  canvas changes.
+- **Three right-hand columns in the KryonCloud message, file and stream cards are anchored to the
+  card's right edge** instead of its left. They hold fixed-width font-2 strings, so the room they
+  need does not change when the card does, and a bare `card.x + 162` ran off a 187 px card that is
+  224 px at the reference width. The offsets are unchanged there.
+- **`tools/preview/preview.py` rendered every board with the shared 12x4 keyboard grid**, including
+  the Waveshare, whose grid is 6x6 — so the one place the keyboard is easiest to eyeball drew keys
+  the board does not have. It now passes the env's `KB_SHAPE`, as `layout_model.compute()`'s own
+  contract requires.
+- **`test_layout.py`'s board list was stale**: it still asserted `esp32-cyd-28` was an unbuilt
+  example, but `board_configs/cyd.ini` had been promoted beside `platformio.ini` so the CYD's OTA
+  slots could be built from the repo, making it a real env. The assertion, and the test run as a
+  whole, now pass.
+
+---
+
 ## [2.0.2] - 2026-10-03
 
 ### Added

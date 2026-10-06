@@ -31,13 +31,15 @@
 
 // --- Display resolution: the LOGICAL canvas, measured AFTER rotation -------------------------
 // These are only FALLBACKS; the live values are the -D KRYONOS_DISPLAY_* build flags in
-// platformio.ini. 240x320 is the canvas the UI was laid out for, and at that size the 6/5 aperture
-// scale lands its corners exactly on the 480 px bezel (sqrt(144^2 + 192^2) = 240).
+// platformio.ini. 201x268 is the canvas the UI is laid out for, and at that size the 96/67 aperture
+// lands its corners exactly on the 480 px bezel (sqrt(100.5^2 + 134^2) = 167.5, and 167.5 * 96/67 =
+// 240). Keep the pair in step with platformio.ini and with SCALE_NUM/SCALE_DEN, which is derived from
+// it -- a canvas of a different aspect moves the blit off 288x384 and back into the bezel.
 #ifndef KRYONOS_DISPLAY_WIDTH
-#define KRYONOS_DISPLAY_WIDTH 240
+#define KRYONOS_DISPLAY_WIDTH 201
 #endif
 #ifndef KRYONOS_DISPLAY_HEIGHT
-#define KRYONOS_DISPLAY_HEIGHT 320
+#define KRYONOS_DISPLAY_HEIGHT 268
 #endif
 #ifndef KRYONOS_DISPLAY_ROTATION
 #define KRYONOS_DISPLAY_ROTATION 0

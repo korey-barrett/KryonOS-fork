@@ -184,11 +184,12 @@ naming both sizes — that is the signal to fix `TFT_WIDTH`/`TFT_HEIGHT` or the 
 **The one exception is a panel larger than its canvas.** `KRYONOS_DISPLAY_*` is the canvas the UI is
 laid out for, and on most boards that IS the panel. On the Waveshare 2.1B it deliberately is not:
 the panel is a 480x480 circle, so a 480x480 canvas loses its corners to the bezel, and the canvas is
-kept at 240x320 and scaled 6/5 into a 288x384 rect centred in the panel. There the panel's own size
+kept at 201x268 and scaled 96/67 into a 288x384 rect centred in the panel. There the panel's own size
 is a board constant (`BOARD_PANEL_W`/`BOARD_PANEL_H` in `src/Hal/Boards/waveshare-s3-lcd21b/BoardConfig.h`)
 because the RGB timings are written from it, and it is not editable as a build flag. Changing
-`KRYONOS_DISPLAY_*` there resizes the canvas and the aperture rect with it — the panel keeps
-scanning 480x480. See `Display_Touch_Architecture.md` §2.5.
+`KRYONOS_DISPLAY_*` there resizes the canvas and **magnifies** the UI, because the aperture rect stays
+288x384 as long as the canvas keeps its 3:4 aspect — shrink the canvas and the same picture lands
+bigger, with the panel still scanning 480x480 either way. See `Display_Touch_Architecture.md` §2.5.
 
 The reference boards (`m5stack-cardputer`, `lilygo-t-hmi`, `esp32-cyd-28`) are no longer active
 environments; their snippets and implementations are kept as unbuilt examples (§1.1).
