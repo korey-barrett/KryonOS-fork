@@ -81,6 +81,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   BACK, and the missing cases never showed. `timeActionScroll` was already declared, drawn from and
   clamped; nothing could move it. The branch now handles all three thirds, as the timezone picker
   beside it already did.
+- **The Waveshare 2.1B's RGB scanout no longer flickers.** Thin white lines travelled up and down the
+  screen — at first on a still page, then on every screen once the App Store had been opened — and a
+  clean reflash seemed to clear them, which is why they were first read as boot state rather than a
+  timing bug. They are neither. The prebuilt Arduino libs are built with
+  `CONFIG_LCD_RGB_RESTART_IN_VSYNC=y`, which compiles `lcd_rgb_panel_try_restart_transmission` down to
+  an unconditional `do_restart = true` on **every** VBlank and drops the `bb_eof_count <
+  expect_eof_count` desync guard below it (`esp_lcd_panel_rgb.c:1153`), so the GDMA channel is torn
+  down and restarted once per field, always. Espressif's own comment on that path says a late
+  interrupt makes the display "shift as the LCD controller already read out the first data bytes, and
+  resetting DMA will re-send those" — and the restart re-mounts its buffer with a fixed 17-pixel
+  `restart_skip_bytes` that is only correct if it lands where the driver assumes. That is what turns
+  a miss into a thin band of wrong pixels rather than ordinary tearing.
+  - The window is `vsync_pulse_width + vsync_back_porch`. At the vendor 3/8/8 that is 11 of 499 lines,
+    **~377 us** at 16 MHz, while the bounce-refill ISR that keeps the panel fed `memcpy`s 9600 bytes
+    out of PSRAM every ~300 us (`esp_lcd_panel_rgb.c:913`) — the same PSRAM WiFi, mbedTLS and every
+    LittleFS write are using, and which a flash write stalls outright. The margin was thin at boot and
+    gone under load, which is why opening the App Store made it permanent.
+  - `vsync_back_porch` is now **32**, giving 35 lines (~1.2 ms) at 55.8 Hz instead of 58.5. It is the
+    one timing value that departs from the vendor sequence; the panel is DE-mode and takes the longer
+    blanking. Confirmed on hardware.
 
 ---
 
