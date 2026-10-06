@@ -918,10 +918,34 @@ void EspLcdRgbDisplay::fillRoundRect(int32_t x, int32_t y, int32_t w, int32_t h,
     fillRect(x, y + radius, radius, h - 2 * radius, color);
     fillRect(x + w - radius, y + radius, radius, h - 2 * radius, color);
 
-    circleHelper(x + radius, y + radius, radius, 0x1, 0, c, true);
-    circleHelper(x + w - radius - 1, y + radius, radius, 0x2, 0, c, true);
-    circleHelper(x + w - radius - 1, y + h - radius - 1, radius, 0x4, 0, c, true);
-    circleHelper(x + radius, y + h - radius - 1, radius, 0x8, 0, c, true);
+    // Fill the four r-by-r corner squares the bands above leave uncovered, one row per chord,
+    // with the span clipped to the square. (sx, sy) points from the circle's centre towards the
+    // corner being filled; the centre sits on the square's inner corner, which is where
+    // drawRoundRect() puts it too.
+    //
+    // circleHelper() is the wrong tool for this and used to be used here -- the same bug
+    // RamFramebufferDisplay fixed in cc0a62a, still present on this backend. Its filled branch
+    // anchors each chord on the centre column and runs symmetric about it, which is correct for
+    // a whole circle (fillCircle still uses it) but not for a quadrant: the outer half of the
+    // corner square went unpainted and the inner half was spent on the band beside it. Every
+    // fillRoundRect came out with its right-hand corners bitten away -- which on a keypad whose
+    // keys are filled round rects, with drawRoundRect drawing the outline correctly on top,
+    // reads as a hollow link at the top and bottom right of each key. The exact chord is one
+    // integer square-root walk per row and radius is single digits.
+    auto corner = [&](int32_t sx, int32_t sy) {
+        const int32_t cx = (sx < 0) ? x + radius : x + w - radius - 1;
+        const int32_t cy = (sy < 0) ? y + radius : y + h - radius - 1;
+        for (int32_t d = 1; d <= radius; d++) {
+            int32_t e = 0;
+            while ((e + 1) * (e + 1) + d * d <= radius * radius) e++;
+            if (e == 0) continue;
+            hLine((sx < 0) ? cx - e : cx, cy + sy * d, e + 1, c);
+        }
+    };
+    corner(-1, -1); // top-left
+    corner(1, -1);  // top-right
+    corner(1, 1);   // bottom-right
+    corner(-1, 1);  // bottom-left
 }
 
 void EspLcdRgbDisplay::drawTriangle(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t x3,

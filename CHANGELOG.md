@@ -65,6 +65,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   example, but `board_configs/cyd.ini` had been promoted beside `platformio.ini` so the CYD's OTA
   slots could be built from the repo, making it a real env. The assertion, and the test run as a
   whole, now pass.
+- **Every filled round rect on the Waveshare 2.1B gets its right-hand corners back.** `cc0a62a`
+  fixed `fillRoundRect()`'s corner fill in `RamFramebufferDisplay` — `circleHelper()`'s filled
+  branch anchors each chord on the circle's centre column, which is correct for a whole circle but
+  not for a quadrant, so the outer half of each right-hand corner square went unpainted — but
+  `EspLcdRgbDisplay`, written later for this board, copied the old construction. `drawRoundRect()`
+  paints the correct arc on top, so it reads as two short marks at the top and bottom right of
+  every filled round rect: a hollow link on each keypad key, a notch in the launcher's red exit
+  button. The corners are now filled row by row with the exact chord, as the other backend does.
+  This is the artifact reported against the Korvo-1, on the one backend that never got that fix.
 
 ---
 
