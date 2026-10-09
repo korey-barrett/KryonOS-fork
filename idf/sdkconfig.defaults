@@ -1,6 +1,6 @@
 # KryonOS on the ESP32-S31-Korvo-1 -- ESP-IDF v6.1
 #
-# Seeded from the working reference project for this board (D:\esp32s31_korvo1), which is the only
+# Seeded from the working reference project for this board (X:\esp32s31_korvo1), which is the only
 # proven configuration for this silicon, and pruned to what KryonOS needs. Values that look odd
 # carry a comment saying why -- several of them are the difference between booting and not.
 

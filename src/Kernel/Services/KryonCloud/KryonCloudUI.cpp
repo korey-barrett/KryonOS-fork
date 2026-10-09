@@ -75,34 +75,33 @@ namespace {
 
 // The height of a frame, which is not the same question as the size of a glyph.
 //
-// m.scale is the text scale: TFT_eSPI draws integer multiples, so it is a whole number, and on this
-// panel it is 2 -- correct for a width 3.3x the reference's. The height is a different story: the
-// reference layout is 240x320 portrait and this panel is 800x480 landscape, so a text scale of 2
+// m.scale is the text scale: TFT_eSPI draws integer multiples, so it is a whole number, and on the
+// Korvo-1 it is 2 -- correct for a width 3.3x the reference's. The height is a different story: the
+// reference layout is 240x320 portrait and that panel is 800x480 landscape, so a text scale of 2
 // comes with only 1.5x of height. These screens fill their reference height almost exactly -- the
 // Limits screen's card stack ends 26px above the panel edge at 240x320 -- so scaling their frames
 // by 2 does not overflow a little, it puts the bottom card and its button off the panel entirely.
 //
-// So frames grow by a half step while glyphs grow by a whole one: v * cloudVH / 2, where cloudVH is
-// 2 at 240x320 (leaving every literal below byte-for-byte unchanged) and 3 at 800x480. A frame is
-// still at least as tall as the lines drawn into it, and where the half step would put two lines
-// closer than one glyph cell those two lines are given a full cell instead -- see the notes at each
-// such site. Nothing here is applied to a value that is already a metric (m.list.*, m.center*,
-// cloudCardX/W), which are proportional and must not be scaled twice.
-int16_t cloudVH(const UiMetrics& m) {
-    const int16_t fits = (int16_t)(2 * m.h / 320);   // in halves: 2 at 240x320, 3 at 800x480
-    const int16_t want = (int16_t)(2 * m.scale);
-    return (fits < want) ? fits : want;
+// So a vertical literal takes the height the canvas actually has -- v * m.h / 320 -- and never more
+// than v * m.scale, so a taller panel cannot spread the frames apart any faster than the glyphs
+// grow. At 240x320 that is exactly v, and at 800x480 exactly v * 3/2: both reproduce the historical
+// layouts bit for bit. Nothing here is applied to a value that is already a metric (m.list.*,
+// m.center*, cloudCardX/W), which are proportional and must not be scaled twice.
+int16_t cv(const UiMetrics& m, int16_t v) {
+    const int16_t scaled = (int16_t)((int32_t)v * m.h / 320);
+    const int16_t want   = (int16_t)(v * m.scale);
+    return (scaled < want) ? scaled : want;
 }
-// A distance: the half step, for gaps and offsets between frames.
-int16_t cv(const UiMetrics& m, int16_t v) { return (int16_t)(v * cloudVH(m) / 2); }
-// A height: the half step, but never less than one body glyph cell. A 20px toast or a 22px pill was
-// a 16px glyph plus 4-6px of padding, and the half step alone would leave the glyph nowhere to sit
-// at a text scale of 2. At 240x320 the floor is 2 and every height here is already larger, so the
-// historical numbers still come out unchanged. Only frames that carry a font-2 label use this.
+// A height: as cv, but never shorter than the smallest frame the reference layout ever gave a
+// font-2 label -- a 20px toast, which is a 16px glyph cell plus 4px of air. The floor is inert
+// wherever cv(v) >= v, which is every canvas at least 320 tall, so the historical numbers still
+// come out unchanged; it only bites on a canvas shorter than the reference, where the glyph is a
+// fixed 16px cell that cv would otherwise squeeze out of its own frame. Only frames that carry a
+// font-2 label use this.
 int16_t cvh(const UiMetrics& m, int16_t v) {
     const int16_t h = cv(m, v);
-    const int16_t cell = (int16_t)(2 * m.scale);
-    return (h < cell) ? cell : h;
+    const int16_t floorH = (v < 20) ? v : 20;
+    return (h < floorH) ? floorH : h;
 }
 
 // --- top nav: a title row over a 5-tab row ---
@@ -1077,8 +1076,11 @@ void KryonCloudUI::drawBeamScreen() {
                 else if (cachedBeamMessages[i].msgType == "COMMAND") badgeColor = TFT_ORANGE;
 
                 tftInstance->setTextColor(badgeColor, CLOUD_CARD_BG);
+                // A right-hand column, so it is anchored to the card's right edge rather than to its
+                // left: the badge is a fixed 8px-per-character string, so the room it needs does not
+                // change when the card does. 224 - 142 = 82 at the reference width, unchanged there.
                 tftInstance->drawString(("[" + cachedBeamMessages[i].msgType + "]").c_str(),
-                                        (int16_t)(card.x + 142 * s), (int16_t)(card.y + cv(m, 4)), 2);
+                                        (int16_t)(card.x + card.w - 82 * s), (int16_t)(card.y + cv(m, 4)), 2);
 
                 tftInstance->setTextColor(TFT_WHITE, CLOUD_CARD_BG);
                 String snippet = cachedBeamMessages[i].content;
@@ -1120,7 +1122,9 @@ void KryonCloudUI::drawBeamScreen() {
                                         (int16_t)(card.x + 6 * s), (int16_t)(card.y + cv(m, 4)), 2);
 
                 tftInstance->setTextColor(CLOUD_BAR_STR, CLOUD_CARD_BG);
-                tftInstance->drawString("#public", (int16_t)(card.x + 152 * s), (int16_t)(card.y + cv(m, 4)), 2);
+                // Right-hand column; see the beam badge above. 224 - 152 = 72 at the reference width.
+                tftInstance->drawString("#public", (int16_t)(card.x + card.w - 72 * s),
+                                        (int16_t)(card.y + cv(m, 4)), 2);
 
                 tftInstance->setTextColor(TFT_WHITE, CLOUD_CARD_BG);
                 String snippet = cachedPublicMessages[i].content;
@@ -1513,8 +1517,9 @@ void KryonCloudUI::drawStorageScreen() {
             tftInstance->drawString(fn.c_str(), (int16_t)(card.x + 6 * s), (int16_t)(card.y + cv(m, 8)), 2);
 
             tftInstance->setTextColor(TFT_GREEN, CLOUD_CARD_BG);
+            // Right-hand column; see the beam badge above. 224 - 162 = 62 at the reference width.
             tftInstance->drawString((String(list[i].fileSize / 1024) + " KB").c_str(),
-                                    (int16_t)(card.x + 162 * s), (int16_t)(card.y + cv(m, 8)), 2);
+                                    (int16_t)(card.x + card.w - 62 * s), (int16_t)(card.y + cv(m, 8)), 2);
 
             y = (int16_t)(y + card.h + cardGap);
         }

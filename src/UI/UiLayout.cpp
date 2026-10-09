@@ -109,7 +109,10 @@ UiMetrics UiLayout::compute(int16_t w, int16_t h) {
     // A full-height panel keeps the historical chrome: prompt at y10, a 30px text box at y30, the
     // button row at y70, and the grid from y110. A short panel cannot afford that — 135px minus
     // 110px of chrome would leave 6px keys — so the chrome compresses and the grid takes the rest.
-    if (h < 240) {
+    // KRYONOS_KB_COMPACT_CHROME asks for that same compression on a board whose grid needs the room
+    // even at full height; it is 0 everywhere but the Waveshare, so the test is unchanged for every
+    // other board and this compiles to the identical expression there.
+    if (h < 240 || KRYONOS_KB_COMPACT_CHROME) {
         m.kbPromptY   = (int16_t)(4 * s);
         m.kbTextBox   = { (int16_t)(5 * s), (int16_t)(20 * s), (int16_t)(w - 10 * s), (int16_t)(20 * s) };
         m.kbButtonRow = { 0, (int16_t)(44 * s), w, (int16_t)(24 * s) };

@@ -13,10 +13,11 @@ panel + XPT2046 touch), not a specific product — copy it and give it your own 
 
 | Environment | Chip | Flash/PSRAM | Core / IDF | In `default_envs` | App partition |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | yes | 6.5 MB — ample headroom |
+| `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | yes | 6.25 MB — ample headroom |
 | `esp32-default` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | yes | 3 MB (`huge_app.csv`), no OTA slot |
 | `esp32-cyd-28` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | **no — one product** | 1.875 MB ×2 OTA slots (`min_spiffs.csv`) |
 | `esp32s31-default` | ESP32-S31 (RISC-V) | 16 MB / 16 MB | Arduino 4.0.0-RC1 / IDF 6.1 | **no — preview** | 16 MB table (`default_16MB.csv`) |
+| `esp32s31-korvo1` | ESP32-S31 (RISC-V) | 16 MB / 16 MB | Arduino 4.0.0-RC1 / IDF 6.1 | **no — one product** | 6.25 MB (`default_16MB.csv`) |
 | `waveshare-s3-lcd21b` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | **no — one product** | 16 MB table (`default_16MB.csv`) |
 
 `waveshare-s3-lcd21b` is the first board whose panel is not on SPI at all — see §2.5.
@@ -128,7 +129,7 @@ Each environment's `build_flags` configure TFT_eSPI. The active ESP32-S3 default
 ```
 
 The *active* places these flags live are `platformio.ini` itself (`esp32s3-default`,
-`esp32-default`, `esp32s31-default`, `waveshare-s3-lcd21b`) plus the board snippets under
+`esp32-default`, `esp32s31-korvo1`, `esp32s31-default`, `waveshare-s3-lcd21b`) plus the board snippets under
 `src/Hal/Boards/board_configs/` that are listed in `[platformio] extra_configs` — today that is
 `cyd.ini` (`esp32-cyd-28`). Registering a snippet there makes it buildable with
 `pio run -e <name>` without adding it to `default_envs`, so a bare `pio run` still builds only the
@@ -168,10 +169,13 @@ one object is simultaneously the driver and the interface; `KryonDisplay::native
 the code that genuinely needs TFT_eSPI (sprite allocation, `Xpt2046TftDriver`), and returns `nullptr`
 on a backend that has none.
 
-Two things still reach for TFT_eSPI and are deliberately left that way for now: every UI file keeps
-`#include <TFT_eSPI.h>` for the `TFT_*` colour and `*_DATUM` macros, and notification/JS sprites are
-still `TFT_eSprite`, which needs a `TFT_eSPI*` — hence `nativeTft()` and the graceful no-op when it is
-null. Decoupling the macros and adding a backend-neutral `KryonSprite` are follow-ups.
+Two things still reach for TFT_eSPI on the boards that have it, and are deliberately left that way:
+every UI file keeps `#include <TFT_eSPI.h>` for the `TFT_*` colour and `*_DATUM` macros, and
+notification/JS sprites are `TFT_eSprite` — which needs a `TFT_eSPI*`, hence `nativeTft()` and the
+graceful no-op when it is null. A backend-neutral `KryonSprite` now exists for targets without the real
+library (`src/Hal/Display/KryonSprite.{h,cpp}`, compiled where `KRYONOS_KRYON_SPRITE` is set, and
+composed of `RamFramebufferDisplay` plus the ported text engine); what remains a follow-up is
+decoupling the `TFT_*` macros from the UI files.
 
 Exactly one board implementation defines the object. There is one default implementation **per chip
 type**, each behind a positive guard set by its environment in `platformio.ini`:
@@ -182,6 +186,7 @@ type**, each behind a positive guard set by its environment in `platformio.ini`:
 | `esp32-default` | `TARGET_ESP32_DEFAULT` | `src/Hal/Boards/esp32/BoardConfig.cpp` |
 | `esp32-cyd-28` | `TARGET_CYD` | `src/Hal/Boards/cyd/BoardConfig.cpp` |
 | `waveshare-s3-lcd21b` | `TARGET_WAVESHARE_S3_LCD21B` | `src/Hal/Boards/waveshare-s3-lcd21b/BoardConfig.cpp` |
+| `esp32s31-korvo1` | `TARGET_ESP32S31_KORVO1` | `src/Hal/Boards/esp32s31-korvo1/BoardConfig.cpp` |
 
 > **Trap:** these files used to be guarded by an *inverse* condition
 > (`#if !defined(TARGET_CARDPUTER) && !defined(TARGET_CYD) && !defined(TARGET_T_HMI)`). Adding a new
@@ -204,6 +209,15 @@ resolution/rotation work moves this into a single `Display::begin()` so rotation
 profile.
 
 ### 2.5 A non-TFT_eSPI backend: the RGB parallel panel
+
+There are **two** RGB backends, and the difference between them is what configures the panel.
+`EspLcdRgbDisplay` (the rest of this section) is the Waveshare 2.1B's, and it has to reverse-engineer
+its panel: a register map, an init table, a GPIO expander. `KorvoRgbDisplay`
+(`src/Hal/Display/KorvoRgbDisplay.{h,cpp}`) is the ESP32-S31-Korvo-1's, and it configures nothing by
+hand — pins, timings and frame-buffer count are vendored into it from Espressif's `esp32_s31_korvo_1`
+BSP, because that BSP is not available on the PlatformIO path this board ships on. It also runs with no
+bounce buffer and no second framebuffer, both of which are closed off on the S31; the reasons are in
+`KorvoRgbDisplay.h` and `handoff/project.md` §10–§11.
 
 `esp32s3-default` and `esp32-default` both drive SPI panels through TFT_eSPI, but TFT_eSPI cannot
 drive every panel. The Waveshare ESP32-S3-Touch-LCD-2.1B carries a **480×480 ST7701 on a 16-bit RGB
@@ -259,19 +273,28 @@ into the largest rectangle that fits the circle:
 | | value |
 |---|---|
 | panel (scan size) | 480×480, `BOARD_PANEL_W`/`BOARD_PANEL_H` |
-| logical canvas | 240×320, `KRYONOS_DISPLAY_*` |
-| scale | 6/5 uniform (`SCALE_NUM`/`SCALE_DEN`) |
+| logical canvas | 201×268, `KRYONOS_DISPLAY_*` |
+| scale | 96/67 uniform (`SCALE_NUM`/`SCALE_DEN`) |
 | blitted rect | 288×384 at offset (96, 48) |
-| half-diagonal | √(144² + 192²) = 240 px — the bezel radius, exactly |
+| half-diagonal | √(100.5² + 134²) = 167.5 px, and 167.5 × 96/67 = 240 px — the bezel radius, exactly |
 
-6/5 is the largest uniform scale whose corners land on the circle, and it is not a round number by
-chance: a 240×320 canvas has a half-diagonal of 200 px, so it can grow to 200 × 6/5 = 240. Larger
-scales are cut, and they go fast — at 1.4× only the middle 51% of the top edge is still inside the
-circle, and at 1.5× the entire top and bottom edges fall outside it, taking the footer with them.
+**The blitted rect does not depend on the canvas size**, and that is the property that makes the size
+tunable at all. Any 3:4 canvas is `3m × 4m`, so its half-diagonal is `2.5m` and `k = 240 / 2.5m`; the
+rect is then `3m × k = 288` by `4m × k = 384` for **every** `m`. Shrinking the canvas therefore does
+not shrink the picture — it magnifies it, because the rect stays where it is and only the content
+inside it grows. The board uses that: 201×268 (`m = 67`, `k = 96/67 = 1.433`) replaced the original
+240×320 (`m = 80`, `k = 6/5 = 1.2`) to make the UI 1.2× larger, taking body text from 19 px to 23 px
+on the glass and list rows from 36 px to 43 px. That is also why `SCALE_NUM`/`SCALE_DEN` is derived
+from the canvas rather than fixed: a canvas of a different aspect moves the rect off 288×384 and back
+into the bezel.
 
-Because the canvas is 240×320, `UiLayout`, the ~91 `M()` call sites and every screen lay out exactly
-as they do on the reference boards, and `UiLayout::compute` needs no special case for this board. The
-only code that knows the panel is bigger is the backend.
+`201` is not arbitrary either: it is the narrowest canvas the screens tolerate. `InstallerUI`'s
+three-button row spans `3 × 60 + 2 × 10 = 200` px, and `UiLayout::dialogButtonSpaced()` centres that
+run, so on a 198-wide canvas the outer two buttons hang off both edges.
+
+Because `uiScale(201, 268)` is 1 — 201 is under 240 — `UiLayout`, the ~91 `M()` call sites and every
+screen lay out exactly as they do on the reference boards, and `UiLayout::compute` needs no special
+case for this board. The only code that knows the panel is bigger is the backend.
 
 **One transform, two consumers.** The blit upscales canvas→panel, and touch has to invert it. Rather
 than keep a second copy of the scale and offset in the touch driver — which drifts from the blit the
@@ -280,18 +303,18 @@ first time one side changes — the backend owns both directions and publishes t
 
 ```cpp
 // Forward (blit, destination-driven):
-//   source column for panel offset dx  =  (dx - OFFSET_X) * 5 / 6
+//   source column for panel offset dx  =  (dx - OFFSET_X) * 67 / 96
 // Inverse (touch):
-//   canvas pixel for panel pixel px    =  (px - OFFSET_X) * 5 / 6
+//   canvas pixel for panel pixel px    =  (px - OFFSET_X) * 67 / 96
 //                                        -- the same expression, one implementation
 ```
 
 Three rules make it correct, and all three are easy to get subtly wrong:
 
-- **Both edges come from the ceiling**, not the floor: `canvasToPanelEdge(c) = (c*6 + 4)/5`. The floor
-  is the natural thing to write and it names a panel pixel that displays `c − 1`.
+- **Both edges come from the ceiling**, not the floor: `canvasToPanelEdge(c) = (c*96 + 66)/67`. The
+  floor is the natural thing to write and it names a panel pixel that displays `c − 1`.
 - **Bounds are checked in rect space, BEFORE the divide.** Integer division truncates toward zero, so
-  a tap one pixel left of the rect would divide `-1` by `6/5` to `0` and be accepted as a legitimate
+  a tap one pixel left of the rect would divide `-1` by `96/67` to `0` and be accepted as a legitimate
   hit on the canvas's left edge. A tap outside the rect returns false and is logged once with its raw
   coordinates, because a controller reporting something other than panel pixels should say so on the
   first flash rather than present as dead touch.
@@ -301,7 +324,7 @@ Three rules make it correct, and all three are easy to get subtly wrong:
   inverse: measured across the 288 destination columns, 192 of them would display a pixel one off from
   the one the touch transform reports.
 
-`Display::width()`/`height()` report the **canvas** (240×320), so `Display::begin()`'s
+`Display::width()`/`height()` report the **canvas** (201×268), so `Display::begin()`'s
 canvas-vs-flag check stays silent. `EspLcdRgbDisplay::setRotation()` refuses a non-zero rotation on
 this board and says so once: the aperture offset and the touch transform are both derived at
 rotation 0, so rotating would move the canvas inside the panel while touch kept mapping to where it
@@ -424,7 +447,8 @@ The drivers live in `src/Hal/Touch/`:
 | `Xpt2046BitbangDriver.{h,cpp}` | Four-GPIO bit-banged XPT2046 (the historical implementation). |
 | `Xpt2046TftDriver.{h,cpp}` | XPT2046 via TFT_eSPI's own touch path. |
 | `NullTouchDriver.h` | No panel; reports no touch. |
-| `CapacitiveTouchDriver.{h,cpp}` | FT6236 / GT911 / CST816 over I²C. The CST816 path is selected by the Waveshare 2.1B, whose CST820 answers to the same map; none of the three has been run against a real panel yet. |
+| `CapacitiveTouchDriver.{h,cpp}` | FT6236 / GT911 / **GT1151** / CST816 over I²C. The CST816 path is selected by the Waveshare 2.1B, whose CST820 answers to the same map. The GT1151 is the S31-Korvo-1's controller — the part reports itself as a GT1158 — and is the first of the four driven against a real panel; the other three are implemented at register level and have no panel to be tested against. |
+| `EspLcdTouchDriver.{h,cpp}` | An adapter over an `esp_lcd_touch` handle rather than a register map. Compiled only where `KRYONOS_TOUCH_USE_ESP_LCD` is defined, which is the IDF build's S31 path; the PlatformIO S31 environment uses `Gt1151Driver` above instead. |
 
 Selection is the string build flag `KRYONOS_TOUCH_DRIVER`. Left unset it is `auto`, which reproduces
 the old compile-time ladder exactly — so every pre-existing board keeps the driver it already used
@@ -485,7 +509,7 @@ rotate `0x01`, invert_x `0x02`, invert_y `0x04`). It survives reboot and is re-a
 serial `cal` command erases and re-runs calibration.
 
 A capacitive controller reports **panel** pixels, not canvas ones, and on most boards those are the
-same thing. Where they are not — the Waveshare 2.1B, whose 240×320 canvas is blitted 6/5 into a
+same thing. Where they are not — the Waveshare 2.1B, whose 201×268 canvas is blitted 96/67 into a
 480×480 circle (§2.5.1) — a clamp alone would put every tap up to twice its distance off. Those
 boards' backends own the inverse transform, and the touch path asks for it:
 
@@ -542,12 +566,12 @@ macros and never `tft.width()` directly.
 ## 5. Toolchain: the pinned platform
 
 Each environment pins the pioarduino distribution of the Espressif 32 platform by URL, and the pin
-differs per chip because the S31 needs a newer IDF than the other two:
+differs per chip because the S31 needs a newer IDF than the others:
 
 | Env | Pinned platform | Resolves to |
 | :--- | :--- | :--- |
 | `esp32s3-default`, `esp32-default`, `esp32-cyd-28`, `waveshare-s3-lcd21b` | `.../releases/download/55.03.312-1/platform-espressif32.zip` | Arduino 3.3.12 / IDF 5.5.5 (stable) |
-| `esp32s31-default` | `.../releases/download/61.04.00-RC1/platform-espressif32.zip` | Arduino 4.0.0-RC1 / IDF 6.1 (**pre-release**) |
+| `esp32s31-default`, `esp32s31-korvo1` | `.../releases/download/61.04.00-RC1/platform-espressif32.zip` | Arduino 4.0.0-RC1 / IDF 6.1 (**pre-release**) |
 
 ```
 platform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip
@@ -660,14 +684,29 @@ is a `KryonDisplay` backend built on `esp_lcd` (Phase 5, §7).
    - the `matrix.board` list and the bootloader-offset `case` in `.github/workflows/release.yml`;
    - the `target_board` choices, the `ota_*` toggles and the `ota_flags` / `all_boards` maps in
      `.github/workflows/push-update.yml`;
-   - the `"boards"` keys in `updates/esp32/v2/update.json`.
+   - the `"boards"` keys in **the manifest for the board's chip variant**.
 
-   The string must be spelled identically in all three, because the firmware reports itself under
-   exactly one name: `KRYONOS_BOARD_ID` in `src/Hal/Display/DisplayConfig.h`, returned verbatim by
-   `OTAManager::getBoardTargetName()` and used as the manifest lookup key. There is deliberately no
+   **The manifest is per-variant, and that is the part easily missed.** There is no single
+   `updates/esp32/v2/update.json` for everything: each chip has its own branch — `esp32`, `esp32s3`,
+   `esp32s31` — and the firmware fetches
+   `.../refs/heads/<variant>/updates/<variant>/v2/update.json`, where `<variant>` comes from
+   `KRYONOS_OTA_VARIANT` and defaults to `esp32`. So a new S31 board's entry goes in
+   `updates/esp32s31/v2/update.json` on the `esp32s31` branch, and its environment must set
+   `-D KRYONOS_OTA_VARIANT="esp32s31"`. A board that sets nothing reads the classic-ESP32 manifest
+   and finds no entry for itself — which is a silent fallback to the baseline release, not an error.
+   Check the file exists on the branch before trusting the registration: both the `esp32s31` and
+   `esp32s3` branches advertised a manifest nobody had ever written — their `updates/README.md` said
+   so in its first paragraph while the file was absent. Both exist now; the check is what stops the
+   next board repeating it.
+
+   The name must be spelled identically in all three places, because the firmware reports itself
+   under exactly one name: `KRYONOS_BOARD_ID` in `src/Hal/Display/DisplayConfig.h`, returned verbatim
+   by `OTAManager::getBoardTargetName()` and used as the manifest lookup key. There is deliberately no
    second copy of the name in the OTA code — a parallel `TARGET_*` ladder in `OTAManager` is how the
    manifest and the build matrix drifted apart before, leaving a board whose manifest entry no device
-   ever asked for. When adding the manifest entry, seed it with `"supports_ota": false` and a `guide`
+   ever asked for. (That ladder is back as of `3260bac` and was removed again in `1f3062b`; if these
+   two ever disagree again, believe `KRYONOS_BOARD_ID`.) When adding the manifest entry, seed it with
+   `"supports_ota": false` and a `guide`
    until a release exists that actually carries binaries named for the new environment; `push-update.yml`
    promotes the board to `true` and fills in `firmware_url` / `firmware_size` / `firmware_md5` from the
    downloaded assets on its next run. Leaving an entry with `supports_ota: true` and no matching release
@@ -788,10 +827,12 @@ pixel-identical at 240×320 at each step:
     renders a 60px header, 60px rows, 32px body text, an 80×60 app-exit button and 66×65 keyboard keys.
 
     The scale is 1 on every board that predates this one, so those layouts are bit-identical and no
-    build flag was needed: esp32, esp32s3 and `waveshare-s3-lcd21b` all declare a 240×320 canvas (the
+    build flag was needed: esp32, esp32s3 and `waveshare-s3-lcd21b` all declared a 240×320 canvas (the
     Waveshare's 480×480 panel is addressed through its round-aperture upscale, not a larger canvas),
     and 240×135 resolves to 0 and clamps up to 1. `tools/preview/test_layout.py` still pins every
-    historical 240×320 / 240×135 value and passes unchanged.
+    historical 240×320 / 240×135 value and passes unchanged. (The Waveshare's canvas has since been
+    retuned to 201×268 for a larger UI; `s` is still 1 there, because the board grows by aperture
+    scale rather than by scale factor — see §2.5.1.)
 
     Text is scaled *separately*, by the backend rather than by ~200 call sites: `kryon_text` already
     takes a `size` (TFT_eSPI's `textsize`) through `setTextSize()`, and `KryonSprite` feeds it into the
@@ -835,7 +876,8 @@ pixel-identical at 240×320 at each step:
   `esp32-default` build, and the S3 target also builds with
   `-D KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RAM`. Two caveats: the RAM rasterizer compiles and binds
   but has never been run, and it embeds no font, so it draws geometry only. `KryonSprite` (a
-  backend-neutral sprite) and removing the remaining `TFT_*` macro dependency are outstanding.
+  backend-neutral sprite) is now in `src/Hal/Display/`, and is what the S31's RGB backend draws into
+  and pushes from; removing the remaining `TFT_*` macro dependency is still outstanding.
 - **Phase 6** — new-board recipe hardening, CI build matrix, and a gate that fails on reintroduced
   hard-coded dimensions. The CI/OTA registration half is done: `OTAManager::getBoardTargetName()` now
   returns `KRYONOS_BOARD_ID` directly instead of a `TARGET_*` ladder, `release.yml` derives the

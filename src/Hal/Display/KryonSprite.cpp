@@ -1,3 +1,6 @@
+// Compiled only where a backend has no real TFT_eSPI -- see the note at the top of KryonText.cpp.
+#if defined(KRYONOS_KRYON_SPRITE)
+
 #include "KryonSprite.h"
 
 #include "Hal/Display/RamFramebufferDisplay.h"
@@ -184,3 +187,5 @@ int16_t KryonSprite::textWidth(const char* string) { return textWidth(string, la
 int16_t KryonSprite::textWidth(const char* string, uint8_t font) {
     return kryon_text::textWidth(string, font, size_);
 }
+
+#endif // KRYONOS_KRYON_SPRITE

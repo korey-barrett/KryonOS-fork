@@ -7,7 +7,7 @@
 </p>
 
 <p>
-  An open-source GUI operating system and JavaScript app platform for ESP32 and ESP32-S3, with graphics, hardware APIs, file management, an App Store, and cloud services.
+  An open-source GUI operating system and JavaScript app platform for ESP32, ESP32-S3 and ESP32-S31, with graphics, hardware APIs, file management, an App Store, and cloud services.
 </p>
 
 <p align="center">
@@ -56,7 +56,7 @@
 </p>
 </div>
 <hr>
-<p>KryonOS is an <strong>open-source</strong>, lightweight, high-performance <strong>GUI Operating System and JavaScript App Runtime</strong> designed specifically for the ESP32 and ESP32-S3 microcontrollers. It provides a complete desktop-like experience on embedded devices, featuring an integrated JS engine (Duktape) for executing standalone JavaScript applications, double-buffered graphics for smooth 2D/3D rendering, KryonCloud services, on-device AI streaming, an App Store, file management, and direct hardware API access.</p>
+<p>KryonOS is an <strong>open-source</strong>, lightweight, high-performance <strong>GUI Operating System and JavaScript App Runtime</strong> designed specifically for the ESP32, ESP32-S3 and ESP32-S31 microcontrollers. It provides a complete desktop-like experience on embedded devices, featuring an integrated JS engine (Duktape) for executing standalone JavaScript applications, double-buffered graphics for smooth 2D/3D rendering, KryonCloud services, on-device AI streaming, an App Store, file management, and direct hardware API access.</p>
 
 <table border="1" cellpadding="6" cellspacing="0">
   <thead>
@@ -85,7 +85,7 @@
 
 <h2>Features</h2>
 <ul>
-  <li><strong>JavaScript App Runtime (v2.0.0 / API Level 2):</strong> Execute interactive, standalone JS apps natively on the ESP32 using the optimized Duktape ECMAScript engine.</li>
+  <li><strong>JavaScript App Runtime (API Level 2):</strong> Execute interactive, standalone JS apps natively on the ESP32 using the optimized Duktape ECMAScript engine.</li>
   <li><strong>Multi-Board Hardware Abstraction Layer (HAL):</strong> Unified hardware architecture with out-of-the-box support for touch screens, parallel displays, matrix keyboards, and multi-bus SD cards.</li>
   <li><strong>KryonCloud Services &amp; On-Device AI Engine (<code>Kryon.ai</code> / <code>System.ai</code>):</strong> Real-time token streaming (<code>SSE</code>), structured JSON extraction, and vision processing directly on device.</li>
   <li><strong>KryonBeam Mesh Messenger:</strong> Hardware-to-hardware communication across paired devices with broadcast and direct messaging channels.</li>
@@ -140,6 +140,14 @@
       <td>CST820 capacitive (I2C)</td>
     </tr>
     <tr>
+      <td><strong>ESP32-S31-Korvo-1</strong></td>
+      <td><em>Preview</em></td>
+      <td>ESP32-S31 (RISC-V)</td>
+      <td>16MB Flash, 16MB PSRAM</td>
+      <td>800x480 RGB Parallel (16-bit)</td>
+      <td>GT1151 capacitive (I2C)</td>
+    </tr>
+    <tr>
       <td><strong>M5Stack Cardputer v1.1</strong></td>
       <td><em>Experimental</em></td>
       <td>ESP32-S3 (Stamp-S3)</td>
@@ -166,7 +174,9 @@
   </tbody>
 </table>
 
-<p><strong>Note on Experimental Boards (M5Stack Cardputer, LilyGO T-HMI, ESP32-CYD-28):</strong> Target boards marked as <em>Experimental</em> are implemented at the driver and HAL level but currently lack hands-on physical verification due to unavailable test hardware. If you test or flash KryonOS on these boards and encounter any issues or calibration offsets, please submit an issue on GitHub. Community feedback and contributions for these devices are strongly encouraged!</p>
+<p><strong>Note on Experimental Boards (M5Stack Cardputer, LilyGO T-HMI):</strong> Target boards marked as <em>Experimental</em> are implemented at the driver and HAL level but currently lack hands-on physical verification due to unavailable test hardware. If you test or flash KryonOS on these boards and encounter any issues or calibration offsets, please submit an issue on GitHub. Community feedback and contributions for these devices are strongly encouraged!</p>
+
+<p>The <strong>ESP32-CYD-28</strong> is the exception among the Experimental entries: it has been measured on real hardware. The in-place OTA workaround documented in <a href="updates/README.md">updates/README.md</a> was established by running the same firmware on a CYD with the SD card in and then out, with nothing else changed, so its entry is Experimental for driver maturity rather than for want of a board.</p>
 
 <blockquote>
   <p><strong>ESP32-S3 N16R8 Setup:</strong> For wiring schematics, PSRAM configuration, and PlatformIO setup for the default reference board, see the <strong><a href="Documentation/ESP32_S3_N16R8_Guide.md">ESP32-S3 N16R8 Guide</a></strong>.</p>
@@ -316,14 +326,19 @@
 <pre>esptool.py --chip esp32s3 --port COM14 --baud 921600 write_flash -z \
   0x0 bootloader.bin \
   0x8000 partitions.bin \
-  0xe000 boot_app0.bin \
   0x10000 firmware.bin</pre>
+
+<p>A release publishes <strong>three</strong> files per board —
+<code>bootloader.bin</code>, <code>partitions.bin</code> and <code>firmware.bin</code>. There is no
+<code>boot_app0.bin</code> among them: that image belongs to the Arduino core rather than to a KryonOS
+build, and the bootloader boots <code>ota_0</code> when the <code>otadata</code> partition is blank,
+so it is not needed above.</p>
 
 <p><strong>Do not write a <code>firmware.factory.bin</code> at offset <code>0x0</code></strong> on a device
 you have already set up. A factory image spans the whole app region, so it overwrites the
 <code>nvs</code> partition at <code>0x9000</code> — you will have to re-pair KryonCloud (the device
 comes back as a <em>new</em> board, and the old entry has to be deleted) and re-enter WiFi. The
-per-region command above is safe: none of those four offsets lies inside <code>nvs</code>. Offsets,
+per-region command above is safe: none of those three offsets lies inside <code>nvs</code>. Offsets,
 per-board layouts, and what each kind of reflash costs are in
 <strong><a href="Documentation/Flash_and_Persistence.md">Flash &amp; Persistence</a></strong>.</p>
 
@@ -345,9 +360,13 @@ pio run -e esp32-default -t upload
 # time -- the two-slot partition table cannot be delivered by an update:
 pio run -e esp32-cyd-28 -t upload
 
-# Or for the ESP32-S31 default board (preview: Arduino 4.x / ESP-IDF 6.1,
-# excluded from the default environment set until the port is done):
-pio run -e esp32s31-default -t upload
+# Or for the ESP32-S31-Korvo-1 (Arduino 4.x / ESP-IDF 6.1 preview platform).
+# This is the board the fork exists to add, and it builds under PlatformIO alone
+# -- no IDF build system and no BSP:
+pio run -e esp32s31-korvo1 -t upload
+
+# esp32s31-default is the older placeholder for the S31 chip type, mirroring the
+# S3 wiring. It is superseded by esp32s31-korvo1 above and is not in default_envs.
 
 # Display size is a build flag, not a code constant: edit the
 # KRYONOS_DISPLAY_WIDTH / _HEIGHT / _ROTATION lines under the environment

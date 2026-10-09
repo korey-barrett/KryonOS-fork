@@ -1,5 +1,6 @@
 #include "OTAManager.h"
 #include "../Network/TLSHelper.h"
+#include "Hal/Display/DisplayConfig.h" // KRYONOS_BOARD_ID -- see getBoardTargetName()
 #include <ArduinoJson.h>
 
 Preferences OTAManager::prefs;
@@ -25,17 +26,18 @@ void OTAManager::init() {
 }
 
 String OTAManager::getBoardTargetName() {
-#if defined(TARGET_CARDPUTER)
-    return "m5stack-cardputer";
-#elif defined(TARGET_T_HMI)
-    return "lilygo-t-hmi";
-#elif defined(TARGET_CYD)
-    return "esp32-cyd-28";
-#elif defined(CONFIG_IDF_TARGET_ESP32S3) || (ARDUINO_USB_CDC_ON_BOOT == 1)
-    return "esp32-s3-devkitc-1-n16r8";
-#else
-    return "esp32doit-devkit-v1";
-#endif
+    // The manifest key is KRYONOS_BOARD_ID and nothing else. Keeping a second copy of the board name
+    // here -- a TARGET_* ladder -- is how the OTA map and the CI build matrix drift apart: the ladder's
+    // spellings ("esp32doit-devkit-v1", "esp32-s3-devkitc-1-n16r8") match no key in
+    // updates/<variant>/v2/update.json, whose keys are the KRYONOS_BOARD_ID spellings, so those boards
+    // look up a key that does not exist and silently take the "board not found" fallback. Their
+    // manifest entries become unreachable and nothing says so.
+    //
+    // This was fixed in 75e7116 and then reverted as collateral in 3260bac, whose message is about the
+    // variant branch and the SD volume -- which is why the note is worth keeping. §6 of
+    // Documentation/Display_Touch_Architecture.md has described this as the design throughout, and the
+    // manifests in the repo are keyed for it.
+    return KRYONOS_BOARD_ID;
 }
 
 bool OTAManager::isVerGreater(const String& newVer, const String& currVer) {

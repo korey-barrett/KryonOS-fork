@@ -8,6 +8,23 @@ uint32_t I2CEngine::s_freq = 400000;
 static bool isReservedSystemPin(int pin) {
     if (pin < 0 || pin > 48) return true;
 
+    // An explicit board declaration outranks the chip heuristics below.
+    //
+    // The ESP32-S31-Korvo-1's touch controller is on GPIO 0/1, and the S31 is not an S3 or a classic
+    // ESP32 -- so it fell into the classic-ESP32 branch, which reserves GPIO 1 as UART0. The bus was
+    // refused outright ("[I2C] ERROR: GPIO 1 is reserved for System Display/Memory"), the GT1151 was
+    // never reachable, and every probe reported "not found" on a controller that was present, wired
+    // and healthy. A board that names its own I2C pins is making the more specific claim.
+    //
+    // This cannot loosen a board that declares nothing: the macros only exist where an environment
+    // set them deliberately.
+#if defined(KRYONOS_TOUCH_I2C_SDA)
+    if (pin == KRYONOS_TOUCH_I2C_SDA) return false;
+#endif
+#if defined(KRYONOS_TOUCH_I2C_SCL)
+    if (pin == KRYONOS_TOUCH_I2C_SCL) return false;
+#endif
+
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ARDUINO_ESP32S3_DEV)
     // ESP32-S3 Flash and Octal PSRAM internal bus
     if (pin >= 26 && pin <= 37) return true;
@@ -277,6 +294,32 @@ bool I2CEngine::writeRaw(uint8_t devAddr, const uint8_t* data, size_t length) {
         offset += chunkSize;
     }
     return true;
+}
+
+bool I2CEngine::readRegBytes16(uint8_t devAddr, uint16_t regAddr, size_t length,
+                               std::vector<uint8_t>& outData) {
+    outData.clear();
+    if (!s_initialized || length == 0 || length > 128) return false;
+
+    Wire.beginTransmission(devAddr);
+    Wire.write((uint8_t)(regAddr >> 8));
+    Wire.write((uint8_t)(regAddr & 0xFF));
+    // false = no STOP. The read below has to be the same transaction; a STOP here loses the register
+    // pointer, and the controller then answers from wherever it was left.
+    if (Wire.endTransmission(false) != 0) {
+        return false;
+    }
+
+    size_t count = Wire.requestFrom(devAddr, (uint8_t)length);
+    if (count != length) {
+        return false;
+    }
+
+    outData.reserve(length);
+    while (Wire.available()) {
+        outData.push_back((uint8_t)Wire.read());
+    }
+    return (outData.size() == length);
 }
 
 bool I2CEngine::readRaw(uint8_t devAddr, size_t length, std::vector<uint8_t>& outData) {

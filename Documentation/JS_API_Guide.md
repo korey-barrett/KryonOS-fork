@@ -4,8 +4,8 @@ Welcome to the **KryonOS JavaScript API Reference**. This document provides deep
 
 ---
 ## KryonOS JS Runtime Version
-### JS Runtime: v2.0.0
-### API Level: 2
+### JS Runtime: v2.0.0 — the runtime generation, independent of the firmware version
+### API Level: 2 — the contract apps are written against (`KRYONOS_API_LEVEL` in `platformio.ini`)
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance

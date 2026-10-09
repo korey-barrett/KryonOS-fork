@@ -18,7 +18,7 @@
 
 namespace {
 
-enum class Kind { Null, Xpt2046Bitbang, Xpt2046Tft, Ft6236, Gt911, Cst816, EspLcd };
+enum class Kind { Null, Xpt2046Bitbang, Xpt2046Tft, Ft6236, Gt911, Gt1151, Cst816, EspLcd };
 
 const char* kindName(Kind kind) {
     switch (kind) {
@@ -26,6 +26,7 @@ const char* kindName(Kind kind) {
         case Kind::Xpt2046Tft:     return "xpt2046-tft";
         case Kind::Ft6236:         return "ft6236";
         case Kind::Gt911:          return "gt911";
+        case Kind::Gt1151:         return "gt1151";
         case Kind::Cst816:         return "cst816";
         case Kind::EspLcd:         return "esp-lcd-touch";
         case Kind::Null:
@@ -76,6 +77,10 @@ Kind resolve() {
     }
     if (strcmp(requested, "ft6236") == 0) return Kind::Ft6236;
     if (strcmp(requested, "gt911") == 0) return Kind::Gt911;
+    // The Korvo-1's part. Named explicitly rather than reached through autoDetect(), because this
+    // controller is found over I2C at a known address rather than inferred from a pin being defined --
+    // there is no pin to infer it from, and a wrong guess would probe an address nothing answers on.
+    if (strcmp(requested, "gt1151") == 0) return Kind::Gt1151;
     if (strcmp(requested, "cst816") == 0) return Kind::Cst816;
     if (strcmp(requested, "esp_lcd") == 0 || strcmp(requested, "esp-lcd-touch") == 0) {
 #if defined(KRYONOS_TOUCH_USE_ESP_LCD)
@@ -97,6 +102,7 @@ ITouchDriver* build(Kind kind) {
         case Kind::Xpt2046Tft:     return new Xpt2046TftDriver();
         case Kind::Ft6236:         return new Ft6236Driver();
         case Kind::Gt911:          return new Gt911Driver();
+        case Kind::Gt1151:         return new Gt1151Driver();
         case Kind::Cst816:         return new Cst816Driver();
         case Kind::EspLcd:
 #if defined(KRYONOS_TOUCH_USE_ESP_LCD)

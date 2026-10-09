@@ -22,11 +22,14 @@ Rect = Tuple[int, int, int, int]
 # A page here is a different CHARACTER SET (letters+digits / symbols), selected by the SYM button --
 # not the row pager, which is derived from the panel height further down. A board uses one or the
 # other: a board with character pages fits its whole grid, so its row-pager page count stays 1.
-KB_SHAPE_DEFAULT = {"cols": 12, "rows": 4, "buttons": 5, "charPages": 1}
+KB_SHAPE_DEFAULT = {"cols": 12, "rows": 4, "buttons": 5, "charPages": 1, "compactChrome": False}
 KB_SHAPE: Dict[str, Dict] = {
-    # 480x480 round capacitive panel: the shared 12x4 grid gives 20x52 canvas-px keys, too narrow to
-    # hit. 6x6 gives 40x35 -- twice as wide, on the axis that was failing.
-    "waveshare-s3-lcd21b": {"cols": 6, "rows": 6, "buttons": 6, "charPages": 2},
+    # 480x480 round capacitive panel, addressed through a 288x384 aperture. The shared 12x4 grid gives
+    # 20x52 canvas-px keys, too narrow to hit; 6x6 gives 33x32 on the board's 201x268 canvas --
+    # proportionally wider, on the axis that was failing. compactChrome claims the vertical room the
+    # six-row grid needs back from the chrome; see KRYONOS_KB_COMPACT_CHROME in UiLayout.h.
+    "waveshare-s3-lcd21b": {"cols": 6, "rows": 6, "buttons": 6, "charPages": 2,
+                            "compactChrome": True},
 }
 
 # Footer button slots (mirrors UiFooterButton in UiLayout.h).
@@ -124,8 +127,11 @@ def compute(w: int, h: int, kb: Dict = None) -> Dict:
     m["kbButtonW"] = w // m["kbButtonCount"]
 
     # A short panel compresses the chrome so the key grid keeps a usable height (see UiLayout.cpp).
-    # The threshold is a panel height, not a pixel dimension, so it is not scaled.
-    if h < 240:
+    # The threshold is a panel height, not a pixel dimension, so it is not scaled. A board can also ask
+    # for that compression outright (KRYONOS_KB_COMPACT_CHROME) when its grid shape needs the room
+    # even at full height; only the Waveshare does, and the flag is False everywhere else, which
+    # makes this the same 240 test it has always been for them.
+    if h < 240 or kb.get("compactChrome"):
         m["kbPromptY"] = 4 * s
         m["kbTextBox"] = (5 * s, 20 * s, w - 10 * s, 20 * s)
         m["kbButtonRow"] = (0, 44 * s, w, 24 * s)

@@ -80,7 +80,7 @@
 // compile only on targets that ship ESP-IDF's RGB panel driver).
 #define KRYONOS_BACKEND_TFT_ESPI 1 // src/Hal/Display/TftEspiDisplay.h -- the real panel driver
 #define KRYONOS_BACKEND_RAM      2 // src/Hal/Display/RamFramebufferDisplay.h -- RAM framebuffer
-#define KRYONOS_BACKEND_RGB      3 // src/Hal/Display/EspLcdRgbDisplay.h -- RGB parallel panel (S3/P4 only)
+#define KRYONOS_BACKEND_RGB      3 // src/Hal/Display/{EspLcdRgbDisplay,KorvoRgbDisplay}.h -- RGB parallel panel (RGB-capable targets: S3, S31, P4)
 #ifndef KRYONOS_DISPLAY_BACKEND
   #define KRYONOS_DISPLAY_BACKEND KRYONOS_BACKEND_TFT_ESPI
 #endif

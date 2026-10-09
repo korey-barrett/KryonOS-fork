@@ -191,34 +191,66 @@ def test_keyboard_paging_240x100() -> None:
     check(lm.kb_key_rect(m, rows, 0, 1) != (0, 0, 0, 0), "page-1's first row has a cell")
 
 
-def test_waveshare_keyboard_240x320() -> None:
-    """The Waveshare 2.1B declares its own keyboard grid; the board's canvas is still 240x320."""
-    print("waveshare-s3-lcd21b keyboard (board-declared 6x6 grid on a 240x320 canvas):")
+def test_waveshare_keyboard_201x268() -> None:
+    """The Waveshare 2.1B declares its own keyboard grid on its own 201x268 canvas."""
+    print("waveshare-s3-lcd21b keyboard (board-declared 6x6 grid on a 201x268 canvas):")
     shape = lm.KB_SHAPE["waveshare-s3-lcd21b"]
-    m = lm.compute(240, 320, shape)
+    m = lm.compute(201, 268, shape)
 
     check_eq((m["kbCols"], m["kbRows"]), (6, 6), "grid is 6x6")
-    check_eq((m["kbButtonCount"], m["kbButtonW"]), (6, 40), "six 40px top buttons")
-    check_eq((m["kbKeyW"], m["kbKeyH"]), (40, 35), "keys are 40x35")
+    check_eq((m["kbButtonCount"], m["kbButtonW"]), (6, 33), "six 33px top buttons")
+    check_eq((m["kbKeyW"], m["kbKeyH"]), (33, 32), "keys are 33x32")
     check_eq(m["kbCharPages"], 2, "two character pages (letters+digits, then symbols)")
     # The whole grid fits, so the ROW pager is inert and no strip is drawn -- the SYM button owns
     # page switching on this board, not the pager.
     check_eq(m["kbRowsPerPage"], 6, "all six rows fit")
     check_eq(m["kbPages"], 1, "row pager is inert")
     check_eq(m["kbPagerH"], 0, "no pager strip")
-    # Chrome is shared with the reference boards, so the aperture-scaled UI keeps the same layout.
+    # This board claims the compact chrome (KRYONOS_KB_COMPACT_CHROME). It is not cosmetic: at 268
+    # tall the full 110px chrome would leave the six rows 26px each, where the compact 72px grid top
+    # gives 32px. Everything from here down is the compact branch, not the reference layout.
     check_eq((m["kbPromptY"], m["kbTextBox"], m["kbButtonRow"], m["kbGridTop"]),
-             (10, (5, 30, 230, 30), (0, 70, 240, 30), 110), "chrome matches the reference layout")
+             (4, (5, 20, 191, 20), (0, 44, 201, 24), 72), "compact chrome")
+    check(m["kbButtonRow"][1] + m["kbButtonRow"][3] <= m["kbGridTop"],
+          "the button row does not overlap the key grid")
     # The grid reaches both canvas edges exactly: no clipped column, no unreachable row.
-    check_eq(lm.kb_key_rect(m, 0, 0, 0), (0, 110, 40, 35), "key (0,0)")
-    check_eq(lm.kb_key_rect(m, 5, 5, 0), (200, 285, 40, 35), "key (5,5) bottom-right")
-    check_eq(lm.kb_row_from_y(m, 110, 0), 0, "y=110 -> row 0")
-    check_eq(lm.kb_row_from_y(m, 319, 0), 5, "y=319 -> row 5")
-    check_eq(lm.kb_row_from_y(m, 109, 0), -1, "above the grid -> -1")
-    # The point of the change: the failing axis is twice as wide as the shared grid's.
+    check_eq(lm.kb_key_rect(m, 0, 0, 0), (0, 72, 33, 32), "key (0,0)")
+    check_eq(lm.kb_key_rect(m, 5, 5, 0), (165, 232, 33, 32), "key (5,5) bottom-right")
+    check_eq(lm.kb_row_from_y(m, 72, 0), 0, "y=72 -> row 0")
+    check_eq(lm.kb_row_from_y(m, 263, 0), 5, "y=263 -> row 5")
+    check_eq(lm.kb_row_from_y(m, 71, 0), -1, "above the grid -> -1")
+    check_eq(lm.kb_row_from_y(m, 267, 0), -1, "below the last row -> -1")
+    # The point of the change: the failing axis is wider than the shared grid's.
     shared = lm.compute(240, 320)
     check_eq(shared["kbKeyW"], 20, "shared 12x4 key width is still 20")
     check(m["kbKeyW"] > shared["kbKeyW"], f"keys are wider (got {m['kbKeyW']})")
+
+
+def test_waveshare_canvas_geometry() -> None:
+    """The board's canvas size is load-bearing twice over; pin what it is chosen for.
+
+    Mirrors platformio.ini's canvas note and the aperture block in EspLcdRgbDisplay.h.
+    """
+    print("waveshare-s3-lcd21b canvas geometry (201x268 -> 288x384 at 96/67):")
+    m = lm.compute(201, 268, lm.KB_SHAPE["waveshare-s3-lcd21b"])
+    # 3:4 is what keeps the inscribed rect on 288x384 for ANY canvas size, which is what lets the
+    # canvas shrink to magnify rather than to shrink the picture.
+    check_eq(201 * 4, 268 * 3, "the canvas is exactly 3:4")
+    # The aperture the UI is actually magnified by, and the rect it lands on.
+    check_eq((201 * 96 + 66) // 67, 288, "canvas width blows up to the 288px aperture")
+    check_eq((268 * 96 + 66) // 67, 384, "canvas height blows up to the 384px aperture")
+    # Corners exactly on the 480px bezel: 144^2 + 192^2 == 240^2. Off by a pixel either way is a black
+    # ring or a clipped corner, so this is asserted rather than eyeballed.
+    check_eq(144 ** 2 + 192 ** 2, 240 ** 2, "the aperture's corners land on the bezel")
+    # The widest fixed row the UI draws is InstallerUI's 3 x 60px buttons with 2 x 10px gaps;
+    # dialogButtonSpaced() centres them and pushes the outer two off the canvas below 200.
+    b = lm.dialog_button_spaced(m, m["dialogButtonRowY"], 30, 0, 3, 60, 10)
+    check_eq(b, (0, 178, 60, 30), "the widest dialog row starts flush at x=0, not negative")
+    check_eq(b[0] >= 0, True, "dialog buttons do not overflow the canvas")
+    # And 268 >= 240 keeps every h < 240 fallback on its normal path -- the 30px notification card,
+    # the OTA title font, KryonCloudUI's vertical rhythm and the keyboard chrome.
+    check(m["h"] >= 240, f"the canvas keeps the full-height layout paths (got h={m['h']})")
+    check_eq(m["cardH"], 42, "notification card keeps its 42px height")
 
 
 def test_other_resolutions_sane() -> None:
@@ -265,11 +297,27 @@ def test_board_discovery() -> None:
     for env in ("esp32-default", "esp32s3-default", "esp32s31-default"):
         check_eq(boards.get(env), (240, 320, 0), f"{env} -> 240x320 rotation 0")
     # The one product board so far, and the only non-SPI panel: an RGB panel whose CANVAS is
-    # 240x320, blitted 6/5 into the 480x480 round bezel (hence 240x320 here, not the panel's size).
-    check_eq(boards.get("waveshare-s3-lcd21b"), (240, 320, 0),
-             "waveshare-s3-lcd21b -> 240x320 rotation 0")
-    # The legacy boards are examples, not build targets: they must NOT be discovered.
-    for env in ("m5stack-cardputer", "esp32-cyd-28", "lilygo-t-hmi", "esp32-s3-devkitc-1-n16r8",
+    # 201x268, blitted 96/67 into the 288x384 rect inscribed in the 480x480 round bezel (hence
+    # 201x268 here, not the panel's own size). See test_waveshare_canvas_geometry for what that
+    # pair is chosen for.
+    check_eq(boards.get("waveshare-s3-lcd21b"), (201, 268, 0),
+             "waveshare-s3-lcd21b -> 201x268 rotation 0")
+    # A retune of that canvas must trip one of these rather than silently laying dialog buttons off
+    # the canvas or switching on the h < 240 fallbacks.
+    ws = boards.get("waveshare-s3-lcd21b")
+    if ws:
+        w, h, _ = ws
+        check(3 * 60 + 2 * 10 <= w,
+              f"canvas fits the widest dialog row (3*60+2*10 <= w, got w={w})")
+        check(h >= 240, f"canvas keeps the full-height layout paths (h >= 240, got h={h})")
+        check(w * 4 == h * 3, f"canvas is 3:4 so the aperture stays 288x384 (got {w}x{h})")
+    # The CYD is a build target, not an example: board_configs/cyd.ini sits beside platformio.ini
+    # rather than under examples/, and the OTA work promoted it there so its two app slots and the
+    # KRYONOS_VERSION manifest could be built from the repo. Same 240x320 canvas as the chip defaults.
+    check_eq(boards.get("esp32-cyd-28"), (240, 320, 0), "esp32-cyd-28 -> 240x320 rotation 0")
+    # These really are examples -- their env blocks live under board_configs/examples/, which is not
+    # globbed, so they must NOT be discovered.
+    for env in ("m5stack-cardputer", "lilygo-t-hmi", "esp32-s3-devkitc-1-n16r8",
                 "esp32doit-devkit-v1"):
         check(env not in boards, f"{env} is not an active env (kept as an example)")
 
@@ -281,7 +329,8 @@ def main() -> int:
     test_list_rows_240()
     test_short_panel_240x135()
     test_keyboard_paging_240x100()
-    test_waveshare_keyboard_240x320()
+    test_waveshare_keyboard_201x268()
+    test_waveshare_canvas_geometry()
     test_other_resolutions_sane()
     test_degenerate_canvas()
     test_board_discovery()

@@ -22,6 +22,14 @@ public:
 
     static bool readRegBytes(uint8_t devAddr, uint8_t regAddr, size_t length, std::vector<uint8_t>& outData);
 
+    // The same repeated-START read for a controller with a 16-bit register address -- the Goodix
+    // GT911 / GT1151 family. It exists because readRegBytes can only send an 8-bit address, and
+    // splicing a writeRaw/readRaw pair in its place is NOT equivalent: writeRaw ends its transaction
+    // with a STOP, after which a Goodix part serves whatever its pointer happens to hold rather than
+    // the register just asked for.
+    static bool readRegBytes16(uint8_t devAddr, uint16_t regAddr, size_t length,
+                               std::vector<uint8_t>& outData);
+
     // Raw Stream Read/Write
     static bool writeRaw(uint8_t devAddr, const uint8_t* data, size_t length);
     static bool readRaw(uint8_t devAddr, size_t length, std::vector<uint8_t>& outData);
