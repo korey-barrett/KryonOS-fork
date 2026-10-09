@@ -10,26 +10,34 @@ re-deriving it.
 
 > These files live in `handoff/`, not the repo root, deliberately: `README.md` already exists at the
 > root and Windows' case-insensitive filesystem would have let a `readme.md` overwrite it. Both are
-> **tracked** — the folder was committed in `3260bac`. The current capture is an uncommitted working
-> change; commit it only when asked.
+> **tracked** — the folder was committed in `3260bac`, and this capture is committed too. Commit
+> further changes only when asked.
 
 ---
 
-## Where things stand — 2026-10-07
+## Where things stand — 2026-10-10
 
-**The 2026-10-03 blocker is closed.** The CYD's in-place OTA failure was the mounted SD card starving
-Arduino `UpdateClass::begin()`'s 4096-byte sector buffer — an internal-heap allocation made *after* the
+**The ESP32-S31-Korvo-1 port is done and verified on hardware.** The board builds and runs under
+**PlatformIO / arduino-esp32 alone** — no IDF build system and no BSP — with the 800x480 panel and the
+GT1151 touch both confirmed on COM3. That is the fork's reason for existing, and it had never built
+that way before. Detail: `project.md` §11.
+
+**The in-place OTA blocker is closed.** The CYD's failure was the mounted SD card starving Arduino
+`UpdateClass::begin()`'s 4096-byte sector buffer — an internal-heap allocation made *after* the
 download's TLS session is already open. With the card removed the identical firmware updated in place
 onto 2.0.2 with nothing else changed between the two runs. `FileSystem` gained
-`suspendSD()`/`resumeSD()` and `SettingsUI` now releases the volume around both `startFlashUpdate()`
-calls. Detail: `project.md` §5.3.
+`suspendSD()`/`resumeSD()` and `SettingsUI` releases the volume around both `startFlashUpdate()` calls.
+Detail: `project.md` §5.3.
 
-**Active work has moved to the Waveshare 2.1B.** Its UI is 1.2x larger, its round-rect corners
-are exact, the Time & Region footer keys work, and its RGB scanout no longer flickers — the last of
-those was a real bug in the panel timing, not boot state. Detail: `project.md` §6.
+**The Waveshare 2.1B is settled.** Its UI is 1.2x larger, its round-rect corners are exact, the Time &
+Region footer keys work, and its RGB scanout no longer flickers — the last of those was a real bug in
+the panel timing, not boot state. Detail: `project.md` §6.
 
-**Nothing is blocked.** The open items in `project.md` §7 are all smaller than what has been cleared,
-and none of them stops anything.
+**The upstream PR is held**, pending a re-test of the S31 on a clean install. `project.md` §8 records
+that decision.
+
+**Nothing else is blocked.** The open items in `project.md` §7 are all smaller than what has been
+cleared, and none of them stops anything.
 
 ---
 
@@ -37,9 +45,8 @@ and none of them stops anything.
 
 1. Read `handoff/project.md`. §3 (hardware), §4 (environments) and §6 (the 2.1B display work) are the
    parts that matter most.
-2. **Two unpushed commits** — `c7610f9` (Time & Region footer) and `fa70f7b` (RGB VBlank) — plus
-   this handoff capture as an uncommitted change to `handoff/readme.md` and `handoff/project.md`. The
-   user asks for pushes separately; confirm before pushing.
+2. **Nothing is unpushed.** `c7610f9` and `fa70f7b` went up on 2026-10-10 along with the S31 port, and
+   `main` and `esp32s31` are both level with their remotes. The user still asks for pushes separately.
 3. If the 2.1B flicker ever comes back, read `project.md` §6.4 *before* changing anything. The
    artifact's **shape** decides whether the porch is even the right knob: coherent lines travelling
    vertically is the missed-restart-window shift, while random speckle is the bounce refill starved by
@@ -75,7 +82,12 @@ Full list with context: `project.md` §8.
 
 ## The goal this serves
 
-The fork's purpose is to run KryonOS on Espressif's **ESP32-S31-Korvo-1** under **ESP-IDF v6.1.0** with
-Espressif's own BSP, and to **serve OTA from the fork's releases** rather than upstream's. The port is
-explicitly meant to be small: reuse the BSP, prefer a build flag over a source edit, do not reshape the
-OS around the board. The OTA work is a prerequisite for shipping the port to real hardware.
+The fork's purpose is to run KryonOS on Espressif's **ESP32-S31-Korvo-1**, and to **serve OTA from the
+fork's own releases** rather than upstream's. The port is explicitly meant to be small: prefer a build
+flag or a board config over a source edit, and do not reshape the OS around the board.
+
+It is now done that way, and the constraint that shaped it is worth stating: the board builds on the
+**upstream stack — PlatformIO with arduino-esp32** — where the IDF build system and Espressif's BSP are
+not available. TFT_eSPI cannot compile for this chip at all, so the panel is driven through `esp_lcd`
+with the BSP's timings vendored into `KorvoRgbDisplay` rather than linked, and the whole board lives in
+`src/` so the PlatformIO and IDF builds share one copy. Detail: `project.md` §11.
