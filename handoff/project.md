@@ -391,3 +391,49 @@ Recorded as memory files under
   (`AppStoreUI.cpp:78`), `help/*.json`, README badges.
 - `EspLcdRgbDisplay`'s bring-up doc comments (`UiLayout.h:77-79`) describe a `setTextSize()` call the
   backend does not make. Correct the wording; do not add a no-op call.
+
+---
+
+## 10. The Korvo-1's panel has no GRAM, so a repaint is visible while it happens
+
+*(Numbered 10 rather than slotted beside §6 because §6 is the Waveshare's work and renumbering it
+would invalidate the §6.4 / §7 / §8 cross-references above.)*
+
+The ESP32-S31-Korvo-1's 800x480 RGB panel has **no frame memory of its own**. Every other board in
+this fork hides a half-drawn state behind the controller's GRAM: the panel holds a complete frame
+and scans that, so the CPU may write behind it freely. This panel scans the frame buffer directly,
+and on this backend the canvas **is** that buffer — one allocation (`num_fbs = 1`), written by the
+CPU and read out by the RGB DMA at the same time.
+
+**The consequence.** While a region is being repainted, the scanout can catch it part-drawn. That is
+what "the New Code and Cancel buttons on the KryonCloud Link screen tore, then corrected
+themselves" is: the buttons were drawn while the DMA was reading those rows, and once the repaint
+finished and nothing further was written, the panel repeated the finished frame and the artifact
+went on its own. It is **self-clearing and expected** — not a fault, and not something to chase.
+
+**Why it is not simply fixed.** Both obvious answers are closed on this part:
+
+- **Bounce buffer** is what this board ran before, and it produced a *permanent* displaced picture.
+  The driver tracks scanout progress in a software counter that only advances when its refill
+  interrupt beats the DMA, and the desync recovery path is guarded by
+  `RGB_LCD_NEEDS_SEPARATE_RESTART_LINK`, which is defined **only for the ESP32-S3**. On the S31 that
+  code is not compiled, so one missed refill offsets every later slice for good, and the public
+  `esp_lcd_rgb_panel_restart()` returns `ESP_ERR_NOT_SUPPORTED`. Hence `bounce_buffer_size_px = 0`.
+- **A page flip** needs that same restart path, so double buffering is unavailable for the same
+  reason.
+
+So the backend trades an artifact that is visible during a repaint for the absence of one that never
+goes away. That is the right side of the trade on this silicon.
+
+**Read the shape before touching anything** — §6.4's table applies to this panel too, and its rows
+want opposite responses:
+
+| Shape | Meaning | Response |
+|---|---|---|
+| brief tearing confined to a region just redrawn, then gone | this | none — expected |
+| coherent lines travelling vertically, persisting | the VBlank restart missed its window | the porch value, §6.4 |
+| random speckle / white noise | the scanout starved by PSRAM contention | cut the contention, **not** the timing |
+
+Detail: `src/Hal/Display/KorvoRgbDisplay.h` ("WHY THE PANEL IS NOT IN BOUNCE BUFFER MODE",
+"WHY present() IS NOT EMPTY"), and `Documentation/Display_Touch_Architecture.md` §2.5 for the
+non-TFT_eSPI backend seam.
