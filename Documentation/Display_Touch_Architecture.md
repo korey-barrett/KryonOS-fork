@@ -17,6 +17,7 @@ panel + XPT2046 touch), not a specific product — copy it and give it your own 
 | `esp32-default` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | yes | 3 MB (`huge_app.csv`), no OTA slot |
 | `esp32-cyd-28` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | **no — one product** | 1.875 MB ×2 OTA slots (`min_spiffs.csv`) |
 | `esp32s31-default` | ESP32-S31 (RISC-V) | 16 MB / 16 MB | Arduino 4.0.0-RC1 / IDF 6.1 | **no — preview** | 16 MB table (`default_16MB.csv`) |
+| `esp32s31-korvo1` | ESP32-S31 (RISC-V) | 16 MB / 16 MB | Arduino 4.0.0-RC1 / IDF 6.1 | **no — one product** | 6.25 MB (`default_16MB.csv`) |
 | `waveshare-s3-lcd21b` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | **no — one product** | 16 MB table (`default_16MB.csv`) |
 
 `waveshare-s3-lcd21b` is the first board whose panel is not on SPI at all — see §2.5.
@@ -555,12 +556,12 @@ macros and never `tft.width()` directly.
 ## 5. Toolchain: the pinned platform
 
 Each environment pins the pioarduino distribution of the Espressif 32 platform by URL, and the pin
-differs per chip because the S31 needs a newer IDF than the other two:
+differs per chip because the S31 needs a newer IDF than the others:
 
 | Env | Pinned platform | Resolves to |
 | :--- | :--- | :--- |
 | `esp32s3-default`, `esp32-default`, `esp32-cyd-28`, `waveshare-s3-lcd21b` | `.../releases/download/55.03.312-1/platform-espressif32.zip` | Arduino 3.3.12 / IDF 5.5.5 (stable) |
-| `esp32s31-default` | `.../releases/download/61.04.00-RC1/platform-espressif32.zip` | Arduino 4.0.0-RC1 / IDF 6.1 (**pre-release**) |
+| `esp32s31-default`, `esp32s31-korvo1` | `.../releases/download/61.04.00-RC1/platform-espressif32.zip` | Arduino 4.0.0-RC1 / IDF 6.1 (**pre-release**) |
 
 ```
 platform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip
