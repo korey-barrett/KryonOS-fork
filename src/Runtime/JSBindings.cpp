@@ -2277,7 +2277,19 @@ void JSBindings::cleanup(duk_context *ctx) {
     buffer3DHeight = 0;
 
     PWMEngine::reset();
-    I2CEngine::reset();
+    // NOT I2CEngine::reset(). The I2C bus is not an app's private resource -- the platform's own touch
+    // driver owns it (the GT1151 on the S31/Korvo-1, the CST820 on the Waveshare), which is exactly why
+    // an app's System.i2c.begin() is a no-op. Releasing it here tore down a bus the OS was still using:
+    // the app exited, Wire.end() ran, and from that moment I2CEngine::readRegBytes16 returned false on
+    // its !s_initialized guard -- so the OS could not see another touch for the rest of the session.
+    //
+    // The symptom was a frozen screen with a drawn-but-inert app exit button, which looks like a hung
+    // app and is not: the app had exited cleanly, and the tap that would return to the launcher needed
+    // a touch that could no longer arrive. Nothing re-initialises the bus afterwards either --
+    // I2cTouchDriver::begin() only calls I2CEngine::begin() when the bus is not yet up, and that runs
+    // at boot. So it stayed dead until reboot.
+    //
+    // The bus is released on reboot, not on app exit.
     IPCManager::clearMessageCallback();
     HTTPServerEngine::reset(ctx);
     for (auto* ws : g_activeWebSockets) {
