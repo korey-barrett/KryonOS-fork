@@ -25,7 +25,12 @@ void OTAManager::init() {
 }
 
 String OTAManager::getBoardTargetName() {
-#if defined(TARGET_CARDPUTER)
+#if defined(TARGET_ESP32S31_KORVO1)
+    // Must match KRYONOS_BOARD_ID and the "boards" key on the esp32s31 branch. Without this case the
+    // S31 fell through to the classic-ESP32 name below, looked up a key no manifest has, and silently
+    // got the "board not found" fallback -- OTA that could never be reached.
+    return "esp32s31-korvo1";
+#elif defined(TARGET_CARDPUTER)
     return "m5stack-cardputer";
 #elif defined(TARGET_T_HMI)
     return "lilygo-t-hmi";
