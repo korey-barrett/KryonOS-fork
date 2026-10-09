@@ -175,10 +175,12 @@ bool Gt911Driver::writeReg8(uint16_t reg, uint8_t value) {
 }
 
 bool Gt911Driver::readReg16(uint16_t reg, uint8_t* out, size_t length) {
-    uint8_t addr[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
-    if (!I2CEngine::writeRaw(address_, addr, sizeof(addr))) return false;
+    // Same repeated-START requirement as the GT1151 below: this is the other Goodix part in the
+    // file, it had the identical writeRaw/readRaw defect, and neither driver had been run against a
+    // panel before -- see the note on the capacitive set. Fixed here rather than left as a known
+    // copy of the same bug.
     std::vector<uint8_t> data;
-    if (!I2CEngine::readRaw(address_, length, data) || data.size() < length) return false;
+    if (!I2CEngine::readRegBytes16(address_, reg, length, data) || data.size() < length) return false;
     for (size_t i = 0; i < length; i++) out[i] = data[i];
     return true;
 }
@@ -295,20 +297,40 @@ bool Gt1151Driver::writeReg8(uint16_t reg, uint8_t value) {
 }
 
 bool Gt1151Driver::readReg16(uint16_t reg, uint8_t* out, size_t length) {
-    uint8_t addr[2] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF)};
-    if (!I2CEngine::writeRaw(address_, addr, sizeof(addr))) return false;
+    // Repeated START, via I2CEngine::readRegBytes16. The writeRaw/readRaw pair this replaces ended
+    // the register write with a STOP, and a Goodix part then answers from wherever its pointer was
+    // left rather than from the register asked for -- which is why the probe "succeeded" on bytes
+    // that were never the product id, with dead touch behind a driver reporting itself ready.
     std::vector<uint8_t> data;
-    if (!I2CEngine::readRaw(address_, length, data) || data.size() < length) return false;
+    if (!I2CEngine::readRegBytes16(address_, reg, length, data) || data.size() < length) return false;
     for (size_t i = 0; i < length; i++) out[i] = data[i];
     return true;
 }
 
 bool Gt1151Driver::probe() {
     if (!I2CEngine::ping(address_)) return false;
-    // 0x8140 is the product id, four bytes on both Goodix parts -- reading it is what distinguishes a
-    // controller that answers from one that merely holds the bus.
-    uint8_t product[4] = {0, 0, 0, 0};
-    return readReg16(0x8140, product, sizeof(product));
+
+    // 0x8140 is the product id. Reading it is what distinguishes a controller that is really there
+    // from one that merely holds the bus -- so this checks the CONTENT, which the first version did
+    // not: a bare "did the read return bytes" is true on an idle bus too.
+    //
+    // The three tests are esp_lcd_touch_gt1151's own (touch_gt1151_read_product_id): the 11-byte
+    // block sums to non-zero, the first three bytes are alphanumeric, and the sensor-id byte is not
+    // the 0xFF an unpopulated bus reads back as.
+    uint8_t buf[11] = {0};
+    if (!readReg16(0x8140, buf, sizeof(buf))) return false;
+
+    uint8_t checksum = 0;
+    for (size_t i = 0; i < sizeof(buf); i++) checksum = (uint8_t)(checksum + buf[i]);
+    if (checksum == 0) return false;
+    if (buf[10] == 0xFF) return false;
+
+    auto alnum = [](uint8_t c) {
+        return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z');
+    };
+    if (!alnum(buf[0]) || !alnum(buf[1]) || !alnum(buf[2])) return false;
+
+    return true;
 }
 
 bool Gt1151Driver::readPoint(uint16_t* x, uint16_t* y) {

@@ -296,6 +296,32 @@ bool I2CEngine::writeRaw(uint8_t devAddr, const uint8_t* data, size_t length) {
     return true;
 }
 
+bool I2CEngine::readRegBytes16(uint8_t devAddr, uint16_t regAddr, size_t length,
+                               std::vector<uint8_t>& outData) {
+    outData.clear();
+    if (!s_initialized || length == 0 || length > 128) return false;
+
+    Wire.beginTransmission(devAddr);
+    Wire.write((uint8_t)(regAddr >> 8));
+    Wire.write((uint8_t)(regAddr & 0xFF));
+    // false = no STOP. The read below has to be the same transaction; a STOP here loses the register
+    // pointer, and the controller then answers from wherever it was left.
+    if (Wire.endTransmission(false) != 0) {
+        return false;
+    }
+
+    size_t count = Wire.requestFrom(devAddr, (uint8_t)length);
+    if (count != length) {
+        return false;
+    }
+
+    outData.reserve(length);
+    while (Wire.available()) {
+        outData.push_back((uint8_t)Wire.read());
+    }
+    return (outData.size() == length);
+}
+
 bool I2CEngine::readRaw(uint8_t devAddr, size_t length, std::vector<uint8_t>& outData) {
     outData.clear();
     if (!s_initialized || length == 0 || length > 128) return false;
