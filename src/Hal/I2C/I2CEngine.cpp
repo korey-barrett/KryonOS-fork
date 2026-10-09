@@ -8,6 +8,23 @@ uint32_t I2CEngine::s_freq = 400000;
 static bool isReservedSystemPin(int pin) {
     if (pin < 0 || pin > 48) return true;
 
+    // An explicit board declaration outranks the chip heuristics below.
+    //
+    // The ESP32-S31-Korvo-1's touch controller is on GPIO 0/1, and the S31 is not an S3 or a classic
+    // ESP32 -- so it fell into the classic-ESP32 branch, which reserves GPIO 1 as UART0. The bus was
+    // refused outright ("[I2C] ERROR: GPIO 1 is reserved for System Display/Memory"), the GT1151 was
+    // never reachable, and every probe reported "not found" on a controller that was present, wired
+    // and healthy. A board that names its own I2C pins is making the more specific claim.
+    //
+    // This cannot loosen a board that declares nothing: the macros only exist where an environment
+    // set them deliberately.
+#if defined(KRYONOS_TOUCH_I2C_SDA)
+    if (pin == KRYONOS_TOUCH_I2C_SDA) return false;
+#endif
+#if defined(KRYONOS_TOUCH_I2C_SCL)
+    if (pin == KRYONOS_TOUCH_I2C_SCL) return false;
+#endif
+
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ARDUINO_ESP32S3_DEV)
     // ESP32-S3 Flash and Octal PSRAM internal bus
     if (pin >= 26 && pin <= 37) return true;
