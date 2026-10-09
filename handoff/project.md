@@ -108,7 +108,8 @@ examples, kept under `src/Hal/Boards/board_configs/examples/` and not built.
 | `esp32-default` | ESP32 | `huge_app.csv` (one 3 MB slot) | **no** — `Update.begin()` returns `UPDATE_ERROR_NO_PARTITION`, surfaced as a normal error, no crash |
 | `esp32-cyd-28` | ESP32 | `min_spiffs.csv` (two 1.875 MB slots) | **yes — the one OTA was tested on** |
 | `waveshare-s3-lcd21b` | ESP32-S3 | `default_16MB.csv` | yes |
-| `esp32s31-default` | ESP32-S31 | — | preview only, not in `default_envs`, not yet ported to the Arduino 4.x API |
+| `esp32s31-korvo1` | ESP32-S31 | platform/board default (6,553,600-byte app slot) | **built and flashed — see §11** |
+| `esp32s31-default` | ESP32-S31 | — | the placeholder, superseded by `esp32s31-korvo1` above. Kept, not in `default_envs` |
 
 **Resolution is a build flag, never a C++ constant.** `KRYONOS_DISPLAY_WIDTH` / `_HEIGHT` / `_ROTATION`
 in `platformio.ini`; `UiLayout` and `Display` are the runtime source of truth.
@@ -119,6 +120,12 @@ in `platformio.ini`; `UiLayout` and `Display` are the runtime source of truth.
 
 - **The S31 and the 3.x core evict each other** from the PlatformIO package cache. Use a separate
   `PLATFORMIO_CORE_DIR` if switching between them often.
+- **The RISC-V toolchain arrives with the container directory UN-STRIPPED.** `idf_tools` extracts it as
+  `toolchain-riscv32-esp/riscv32-esp-elf/bin/`, but PlatformIO looks for `bin/` at the package root, so
+  the compiler exists and is invisible — the build dies with `'riscv32-esp-elf-g++' is not recognized`
+  after a 1.1 GB download. Junctioning each payload directory up to the package root fixes it without
+  re-downloading (the container's own `riscv32-esp-elf` subdirectory is the GCC sysroot and must become
+  a link named `riscv32-esp-elf` at the root, not be left as the container). See §11.
 - **The RISC-V toolchain installs by hand** — PlatformIO leaves a 1.6 KB manifest where the compiler
   should be; extract the 964 MB zip yourself.
 - **TFT_eSPI cannot target the S31.** The legacy backend produced 130 IDF-6.1 errors. An `esp_lcd`
@@ -437,3 +444,81 @@ want opposite responses:
 Detail: `src/Hal/Display/KorvoRgbDisplay.h` ("WHY THE PANEL IS NOT IN BOUNCE BUFFER MODE",
 "WHY present() IS NOT EMPTY"), and `Documentation/Display_Touch_Architecture.md` §2.5 for the
 non-TFT_eSPI backend seam.
+
+---
+
+## 11. The ESP32-S31-Korvo-1 port — done, verified on hardware
+
+*(The fork's reason for existing. §4's environment table and §5 predate it; §4 called the chip "not yet
+ported to the Arduino 4.x API", which is no longer true.)*
+
+**State.** `esp32s31-korvo1` builds with **PlatformIO / arduino-esp32 alone** — no IDF build system and
+no BSP — and runs on the board: the 800x480 panel and the GT1151 touch both verified on COM3.
+`firmware.bin` is 2,121,616 bytes; flash 30.8% of 6,553,600, RAM 28.6% of 327,680.
+
+**The environment** (`platformio.ini`, `[env:esp32s31-korvo1]`):
+
+- pioarduino pre-release `61.04.00-RC1` (Arduino 4.0.0-RC1 / IDF 6.1) — the only spec that ships an
+  `esp32s31` toolchain.
+- `TARGET_ESP32S31_KORVO1`, `KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RGB`, `KRYONOS_KRYON_SPRITE=1`,
+  800x480 at rotation 0, `KRYONOS_TOUCH_DRIVER="gt1151"`, touch I2C on SDA 0 / SCL 1.
+- **No `bodmer/TFT_eSPI`** — it cannot compile for this chip at all (§5.2), and a child env's `lib_deps`
+  *replaces* `[env]`'s rather than extending it, which is the only way to drop one library.
+
+**How the board is wired in** — all of it in `src/`, so the PlatformIO build and the IDF one share it:
+
+- the rasterizer (`KryonText`, `KryonSprite`, the `TFT_eSPI.h` shim, the vendored fonts) moved out of
+  `idf/components/kryonos_s31_display/` into `src/Hal/Display/`. That component now compiles it *from*
+  `src/` rather than from a copy — the rule its `RamFramebufferDisplay` entry already followed.
+- `KorvoRgbDisplay` configures the panel through `esp_lcd` directly. The values Espressif's BSP used —
+  pins, timings, frame-buffer count — are vendored into it and marked at their source, because the BSP
+  is an IDF-only component and this board also builds where none exists.
+- `Gt1151Driver` brings the controller up at register level. **The part identifies as a GT1158**; the
+  driver name is the family.
+- **`KRYONOS_KRYON_SPRITE` is the single switch for "this environment has no real TFT_eSPI"**: it
+  selects the rasterizer, puts the shim on the include path, and compiles out `TftEspiDisplay` (which
+  *inherits* `TFT_eSPI`, so once the shim answers to `<TFT_eSPI.h>` every member it forwards vanishes).
+- `build_src_filter` excludes `src/Hal/Display/fonts/` at `[env]` level — those `.c` files are fragments
+  meant to be `#include`d, and PlatformIO sweeps every `.c` under `src/`.
+
+**Three environment facts that are NOT in the repo**, each of which cost real time:
+
+1. **PlatformIO Core 6.2.0**, in `C:\Users\korey\.platformio\penv` — matching what upstream's unpinned CI
+   resolves to and what this repo's own generated `.vscode/c_cpp_properties.json` recorded
+   (`PLATFORMIO=60200`).
+2. **The toolchain package must have its container directory stripped** — §4's traps.
+3. **`MSYSTEM` has to be cleared for anything PlatformIO runs through `idf_tools.py`**, which refuses
+   MSys/Mingw outright. `unset MSYSTEM` in bash does **not** work here: the harness re-injects it into
+   every child, so even `python -c "os.environ"` sees it. `set MSYSTEM=` *inside cmd* is the only thing
+   that does. That is why the first esptool install failed — and why a "frozen" build window was really a
+   silent 1.1 GB tool download, since `idf_tools --quiet` prints nothing at all.
+
+**Five bugs found on the way, all fixed and pushed:**
+
+| Commit | What it was |
+|---|---|
+| `2ef03e4` | `isReservedSystemPin()` picks its list by chip family, and the S31 fell into the classic-ESP32 branch — which reserves GPIO 1 as UART0. `I2CEngine::begin()` refused the touch bus outright. A board naming `KRYONOS_TOUCH_I2C_SDA/_SCL` now outranks the heuristic. |
+| `a76f9e1` | `readReg16` ended the register write with a STOP; Goodix parts need a repeated START, so the read served whatever the pointer held. `readRegBytes16()` added and both Goodix drivers use it. The probe also validated nothing — four bytes back was enough — so it reported "ready" over an idle bus. |
+| `77b5ea4` | the GT1151 point was parsed one byte early, from the record's track-id byte rather than the X field, giving plausible-but-off-canvas coordinates that clamped to an edge. |
+| `21dc1f2` | `nativeTft()` returned the shim, but nothing ever called `setDisplay()`, so every sprite's push target was null and **every `pushSprite()` on this board was a silent no-op**. |
+| `4706e62` | `JSBindings::cleanup()` released the I²C bus on **every app exit** — see below. |
+
+**The last one deserves its own note: it is invisible in the source and cost an afternoon.** An app
+exited cleanly and `runApp()` drew its red exit button, but the screen then never changed and tapping
+did nothing — which reads exactly like a hung app. The cause is that `cleanup()` did `Wire.end()` on the
+bus the touch controller lives on, and every touch read begins with `if (!s_initialized …) return false`.
+Nothing re-arms it: `I2cTouchDriver::begin()` only calls `I2CEngine::begin()` when the bus is not yet up,
+and that runs at boot. **Not S31-specific** — every I²C-touch board had it (the Waveshare's CST820 is on
+the same bus), and this is merely the first board where an app could be run, exited, and then still need
+touch.
+
+**Not done:**
+
+- **The upstream PR is held**, pending a re-test on a clean install.
+- **`System.i2c.end()`/reset remain exposed to apps**, which would leave the OS in the same blind state
+  the last fix removed the automatic path to. The bus being a platform-owned resource is enforced
+  nowhere.
+- **Cube3d (App Store, third-party) renders ~0.6 s/frame at 800x480** — it was written for 240x320 and
+  draws 15 slices a frame. Its exit button needs the app to poll touch during the press, so at that frame
+  rate it wants a deliberate hold. App-side, not the port.
+- `esp32s31` variant branch is re-synced by the commit that carries this note.
