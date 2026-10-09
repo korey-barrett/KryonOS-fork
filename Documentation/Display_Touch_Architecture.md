@@ -694,9 +694,10 @@ is a `KryonDisplay` backend built on `esp_lcd` (Phase 5, §7).
    `updates/esp32s31/v2/update.json` on the `esp32s31` branch, and its environment must set
    `-D KRYONOS_OTA_VARIANT="esp32s31"`. A board that sets nothing reads the classic-ESP32 manifest
    and finds no entry for itself — which is a silent fallback to the baseline release, not an error.
-   Check the file exists on the branch before trusting the registration: this is exactly how the
-   `esp32s31` branch came to advertise a manifest nobody had ever written, and how `esp32s3`'s still
-   does.
+   Check the file exists on the branch before trusting the registration: both the `esp32s31` and
+   `esp32s3` branches advertised a manifest nobody had ever written — their `updates/README.md` said
+   so in its first paragraph while the file was absent. Both exist now; the check is what stops the
+   next board repeating it.
 
    The name must be spelled identically in all three places, because the firmware reports itself
    under exactly one name: `KRYONOS_BOARD_ID` in `src/Hal/Display/DisplayConfig.h`, returned verbatim

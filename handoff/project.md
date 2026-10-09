@@ -152,11 +152,12 @@ The Waveshare 2.1B's stack, for contrast: platform `55.03.312-1` (= Arduino core
 - `OTAManager::UPDATE_MANIFEST_URL` is now **composed from the chip variant the board env names**
   (`KRYONOS_OTA_VARIANT`). The fork's manifests are meant to live on per-variant branches — `esp32`,
   `esp32s3`, `esp32s31` — each holding `updates/<variant>/v2/update.json`. As of 2026-10-10 only two of
-  those exist: the `esp32` one, and the `esp32s31` one added that day (without it the S31 had nothing
-  to read at all). **`esp32s3`'s is still missing**, so both that branch's `updates/README.md` and this
-  bullet described a file that was never there. A board that sets no `KRYONOS_OTA_VARIANT` keeps the
-  classic-ESP32 branch, so the file still builds everywhere. This one expression is the only
-  firmware-side change on the OTA path; `TLSHelper` calls `setInsecure()`, so no trust anchor changed.
+  those exist — and that was the whole set: the `esp32s3` and `esp32s31` files were both missing, so
+  both branches' `updates/README.md` files described something nobody had written. Both were added on
+  2026-10-10 (the S31 one first, without which the S31 had nothing to read at all). A board that sets
+  no `KRYONOS_OTA_VARIANT` keeps the classic-ESP32 branch, so the file still builds everywhere. This
+  one expression is the only firmware-side change on the OTA path; `TLSHelper` calls `setInsecure()`, so
+  no trust anchor changed.
 - **Release `v2.0.2` published** on the fork: 12 assets, tag at the rewritten `main`.
 - `push-update.yml` has been run for `esp32-cyd-28` only. The other four boards remain at 2.0.1 /
   `supports_ota: false`.

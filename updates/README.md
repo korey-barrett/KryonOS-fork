@@ -2,9 +2,9 @@
 
 This is the `main` branch of [korey-barrett/KryonOS-fork](https://github.com/korey-barrett/KryonOS-fork).
 It carries the source and the `esp32` variant's manifest at `updates/esp32/v2/update.json`. The other
-chip variants serve their own manifests on their own branches, and a device reads the manifest on the
-branch matching its chip: `esp32s31` carries `updates/esp32s31/v2/update.json`, while `esp32s3` has
-not published one and still serves only the `esp32` copy above.
+chip variants serve their own manifests on their own branches — `esp32s3` at
+`updates/esp32s3/v2/update.json` and `esp32s31` at `updates/esp32s31/v2/update.json` — so a device
+reads the manifest on the branch matching its chip.
 
 ## The workaround
 
