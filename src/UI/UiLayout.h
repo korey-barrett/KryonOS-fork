@@ -53,11 +53,18 @@
 #define KRYONOS_KB_ROWS 6
 #define KRYONOS_KB_BUTTONS 6
 #define KRYONOS_KB_CHAR_PAGES 2
+// The grid needs the vertical room more than the chrome does. Its chrome (prompt, text box, button
+// row) is a fixed 110px stack sized for a generous full-height panel, and it does not shrink with
+// the canvas -- so on this board's 268px canvas it would eat 41% of the height and squeeze the six
+// key rows down to 26px. The compressed variant costs the chrome 38px and gives every one of them
+// back to the grid. A board fact like the grid shape above, not a size test.
+#define KRYONOS_KB_COMPACT_CHROME 1
 #else
 #define KRYONOS_KB_COLS 12
 #define KRYONOS_KB_ROWS 4
 #define KRYONOS_KB_BUTTONS 5
 #define KRYONOS_KB_CHAR_PAGES 1
+#define KRYONOS_KB_COMPACT_CHROME 0
 #endif
 
 // ---------------------------------------------------------------------------------------------
@@ -70,9 +77,14 @@
 // panel, and compute() multiplies its fixed constants by it.
 //
 // It is 1 on every board that predates the Korvo-1 -- esp32 and esp32s3 declare 240x320, and the
-// Waveshare's canvas is 240x320 too (its 480x480 panel is addressed through the round-aperture
+// Waveshare's canvas is 201x268 too (its 480x480 panel is addressed through the round-aperture
 // upscale in EspLcdRgbDisplay, not through a bigger canvas). 240x135 resolves to 0 and clamps to 1.
 // So their layouts are bit-identical to before; only a genuinely larger canvas changes anything.
+//
+// The Waveshare is worth spelling out because its canvas is the one that moves: 201x268 is under
+// 240 in its SHORT axis, so s stays 1 and this is a no-op there. Its UI grows by the aperture
+// instead -- shrinking the canvas magnifies the same 288x384 blit -- which is why every constant
+// below is still multiplied by s and none of them are re-tuned for it.
 //
 // Text is scaled separately, by the backend's setTextSize (TFT_eSPI's `textsize`), because only
 // font ids 1, 2 and 4 have data. The two must agree, so this is the one place the number is

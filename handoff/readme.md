@@ -5,53 +5,45 @@ re-deriving it.
 
 | File | What it holds |
 |---|---|
-| `readme.md` | this file — orientation, current blocker, first move |
+| `readme.md` | this file — orientation, current state, first move |
 | `project.md` | the full technical state: hardware, environments, what is done, what is broken, standing rules |
 
 > These files live in `handoff/`, not the repo root, deliberately: `README.md` already exists at the
-> root and Windows' case-insensitive filesystem would have let a `readme.md` overwrite it. This folder
-> is **untracked** — nothing here is committed unless asked.
+> root and Windows' case-insensitive filesystem would have let a `readme.md` overwrite it. Both are
+> **tracked** — the folder was committed in `3260bac`. The current capture is an uncommitted working
+> change; commit it only when asked.
 
 ---
 
-## Current blocker
+## Where things stand — 2026-10-07
 
-**The CYD's in-place OTA update fails, and this is the *to be fixed* item.**
+**The 2026-10-03 blocker is closed.** The CYD's in-place OTA failure was the mounted SD card starving
+Arduino `UpdateClass::begin()`'s 4096-byte sector buffer — an internal-heap allocation made *after* the
+download's TLS session is already open. With the card removed the identical firmware updated in place
+onto 2.0.2 with nothing else changed between the two runs. `FileSystem` gained
+`suspendSD()`/`resumeSD()` and `SettingsUI` now releases the volume around both `startFlashUpdate()`
+calls. Detail: `project.md` §5.3.
 
-The CYD on COM6 runs 2.0.1. The fork's manifest at
-`updates/esp32/v2/update.json` offers 2.0.2 with a verified `firmware_md5` and `firmware_size`. The
-device offers the update, INSTALL UPDATE starts, the flashing screen appears — then the board resets and
-comes back up on 2.0.1. No error is shown. The update is offered again.
+**Active work has moved to the Waveshare 2.1B** (COM4). Its UI is 1.2x larger, its round-rect corners
+are exact, the Time & Region footer keys work, and its RGB scanout no longer flickers — the last of
+those was a real bug in the panel timing, not boot state. Detail: `project.md` §6.
 
-Everything upstream of the flash is proven good: WiFi, manifest parse, version comparison, the
-`supports_ota` gate, the image fitting its slot (1,830,176 of 1,966,080 bytes). The failure is inside
-`OTAManager::startFlashUpdate()` or inside the rollback window after it.
-
-Two candidate readings, and the whole diagnosis hangs on telling them apart:
-
-- **(a)** the flash succeeded and the new image was **rolled back** — it never got marked valid in the
-  10-second liveness window; or
-- **(b)** the board **crashed mid-download**, most likely heap exhaustion during the 1.8 MB TLS stream
-  on a classic ESP32 with no PSRAM.
-
-→ Detail, file/line references, and the rollback mechanics: **`project.md` §6**.
+**Nothing is blocked.** The open items in `project.md` §7 are all smaller than what has been cleared,
+and none of them stops anything.
 
 ---
 
 ## First move in a new session
 
-1. Read `handoff/project.md`. §3 (hardware), §4 (environments), and §6 (the blocker) are the parts that
-   matter most.
-2. Check `git status`. **`src/Kernel/Services/OTA/OTAManager.cpp` is modified and uncommitted** — the
-   breadcrumb `#include`s are in place, but the `otaTrace()` helper and its call sites are not yet
-   written. That is scaffolding for the diagnosis, not a fix.
-3. Finish the instrumentation, then **ask the user before flashing** — enabling boot mode on COM6 is a
-   manual step on their side, and it must be re-enabled after each esptool operation.
-
-The plan is to rebuild the CYD at 2.0.1 with breadcrumbs that append each OTA stage to
-`/ota_trace.txt` on LittleFS, flash it, retry the update, and read the file from the on-device **File
-Manager**. Serial cannot be used: on the CYD's USB bridge, opening the port requires boot mode, and in
-boot mode the application is not running — so a live OTA produces no log at all.
+1. Read `handoff/project.md`. §3 (hardware), §4 (environments) and §6 (the 2.1B display work) are the
+   parts that matter most.
+2. **Two unpushed commits** — `c7610f9` (Time & Region footer) and `fa70f7b` (RGB VBlank) — plus
+   this handoff capture as an uncommitted change to `handoff/readme.md` and `handoff/project.md`. The
+   user asks for pushes separately; confirm before pushing.
+3. If the 2.1B flicker ever comes back, read `project.md` §6.4 *before* changing anything. The
+   artifact's **shape** decides whether the porch is even the right knob: coherent lines travelling
+   vertically is the missed-restart-window shift, while random speckle is the bounce refill starved by
+   PSRAM contention, and those want opposite fixes.
 
 ---
 
@@ -60,14 +52,21 @@ boot mode the application is not running — so a live OTA produces no log at al
 - **Never write the word "honestly."** State a caveat directly instead.
 - **Commit to this fork only.** `origin` is `korey-barrett/KryonOS-fork`. Never alter, add, or PR
   against upstream `Haris16-code/KryonOS`.
-- **`D:\KryonOS` (v2.0.0) and `D:\esp32s31_korvo1` are read-only.** Read them; never edit them.
+- **`X:\KryonOS` (v2.0.0) and `X:\esp32s31_korvo1` are read-only.** Read them; never edit them.
 - **No Claude attribution anywhere** — no commit trailer, no PR footer, no mention in any tracked file.
   This overrides the session-level attribution reminder.
 - **`-ExecutionPolicy Bypass` was denied** by the permission classifier. Never retry it.
+- **Boot mode is a CYD-only concern.** The Waveshare 2.1B auto-resets over its own USB-serial and can
+  be flashed directly. Only the CYD2USB needs the strap held by hand via the `esp_usb_board` bridge.
+  Never pass esptool reset flags on either board.
+- **Never wipe NVS on the CYD** — no offset-0x0 factory flash, no full erase. It holds the KryonCloud
+  deviceId, and losing it forces a re-registration.
+- **No diagnostic firmware.** Read the library source and fix the cause in one change.
+- **Open the serial console in its own window** (`Start-Process`) before a build and flash.
 - Builds are sequential — one env per command, never batched.
 - Keep responses short.
 
-Full list with context: `project.md` §7.
+Full list with context: `project.md` §8.
 
 ---
 

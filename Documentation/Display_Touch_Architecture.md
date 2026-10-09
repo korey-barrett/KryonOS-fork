@@ -259,19 +259,28 @@ into the largest rectangle that fits the circle:
 | | value |
 |---|---|
 | panel (scan size) | 480×480, `BOARD_PANEL_W`/`BOARD_PANEL_H` |
-| logical canvas | 240×320, `KRYONOS_DISPLAY_*` |
-| scale | 6/5 uniform (`SCALE_NUM`/`SCALE_DEN`) |
+| logical canvas | 201×268, `KRYONOS_DISPLAY_*` |
+| scale | 96/67 uniform (`SCALE_NUM`/`SCALE_DEN`) |
 | blitted rect | 288×384 at offset (96, 48) |
-| half-diagonal | √(144² + 192²) = 240 px — the bezel radius, exactly |
+| half-diagonal | √(100.5² + 134²) = 167.5 px, and 167.5 × 96/67 = 240 px — the bezel radius, exactly |
 
-6/5 is the largest uniform scale whose corners land on the circle, and it is not a round number by
-chance: a 240×320 canvas has a half-diagonal of 200 px, so it can grow to 200 × 6/5 = 240. Larger
-scales are cut, and they go fast — at 1.4× only the middle 51% of the top edge is still inside the
-circle, and at 1.5× the entire top and bottom edges fall outside it, taking the footer with them.
+**The blitted rect does not depend on the canvas size**, and that is the property that makes the size
+tunable at all. Any 3:4 canvas is `3m × 4m`, so its half-diagonal is `2.5m` and `k = 240 / 2.5m`; the
+rect is then `3m × k = 288` by `4m × k = 384` for **every** `m`. Shrinking the canvas therefore does
+not shrink the picture — it magnifies it, because the rect stays where it is and only the content
+inside it grows. The board uses that: 201×268 (`m = 67`, `k = 96/67 = 1.433`) replaced the original
+240×320 (`m = 80`, `k = 6/5 = 1.2`) to make the UI 1.2× larger, taking body text from 19 px to 23 px
+on the glass and list rows from 36 px to 43 px. That is also why `SCALE_NUM`/`SCALE_DEN` is derived
+from the canvas rather than fixed: a canvas of a different aspect moves the rect off 288×384 and back
+into the bezel.
 
-Because the canvas is 240×320, `UiLayout`, the ~91 `M()` call sites and every screen lay out exactly
-as they do on the reference boards, and `UiLayout::compute` needs no special case for this board. The
-only code that knows the panel is bigger is the backend.
+`201` is not arbitrary either: it is the narrowest canvas the screens tolerate. `InstallerUI`'s
+three-button row spans `3 × 60 + 2 × 10 = 200` px, and `UiLayout::dialogButtonSpaced()` centres that
+run, so on a 198-wide canvas the outer two buttons hang off both edges.
+
+Because `uiScale(201, 268)` is 1 — 201 is under 240 — `UiLayout`, the ~91 `M()` call sites and every
+screen lay out exactly as they do on the reference boards, and `UiLayout::compute` needs no special
+case for this board. The only code that knows the panel is bigger is the backend.
 
 **One transform, two consumers.** The blit upscales canvas→panel, and touch has to invert it. Rather
 than keep a second copy of the scale and offset in the touch driver — which drifts from the blit the
@@ -280,18 +289,18 @@ first time one side changes — the backend owns both directions and publishes t
 
 ```cpp
 // Forward (blit, destination-driven):
-//   source column for panel offset dx  =  (dx - OFFSET_X) * 5 / 6
+//   source column for panel offset dx  =  (dx - OFFSET_X) * 67 / 96
 // Inverse (touch):
-//   canvas pixel for panel pixel px    =  (px - OFFSET_X) * 5 / 6
+//   canvas pixel for panel pixel px    =  (px - OFFSET_X) * 67 / 96
 //                                        -- the same expression, one implementation
 ```
 
 Three rules make it correct, and all three are easy to get subtly wrong:
 
-- **Both edges come from the ceiling**, not the floor: `canvasToPanelEdge(c) = (c*6 + 4)/5`. The floor
-  is the natural thing to write and it names a panel pixel that displays `c − 1`.
+- **Both edges come from the ceiling**, not the floor: `canvasToPanelEdge(c) = (c*96 + 66)/67`. The
+  floor is the natural thing to write and it names a panel pixel that displays `c − 1`.
 - **Bounds are checked in rect space, BEFORE the divide.** Integer division truncates toward zero, so
-  a tap one pixel left of the rect would divide `-1` by `6/5` to `0` and be accepted as a legitimate
+  a tap one pixel left of the rect would divide `-1` by `96/67` to `0` and be accepted as a legitimate
   hit on the canvas's left edge. A tap outside the rect returns false and is logged once with its raw
   coordinates, because a controller reporting something other than panel pixels should say so on the
   first flash rather than present as dead touch.
@@ -301,7 +310,7 @@ Three rules make it correct, and all three are easy to get subtly wrong:
   inverse: measured across the 288 destination columns, 192 of them would display a pixel one off from
   the one the touch transform reports.
 
-`Display::width()`/`height()` report the **canvas** (240×320), so `Display::begin()`'s
+`Display::width()`/`height()` report the **canvas** (201×268), so `Display::begin()`'s
 canvas-vs-flag check stays silent. `EspLcdRgbDisplay::setRotation()` refuses a non-zero rotation on
 this board and says so once: the aperture offset and the touch transform are both derived at
 rotation 0, so rotating would move the canvas inside the panel while touch kept mapping to where it
@@ -485,7 +494,7 @@ rotate `0x01`, invert_x `0x02`, invert_y `0x04`). It survives reboot and is re-a
 serial `cal` command erases and re-runs calibration.
 
 A capacitive controller reports **panel** pixels, not canvas ones, and on most boards those are the
-same thing. Where they are not — the Waveshare 2.1B, whose 240×320 canvas is blitted 6/5 into a
+same thing. Where they are not — the Waveshare 2.1B, whose 201×268 canvas is blitted 96/67 into a
 480×480 circle (§2.5.1) — a clamp alone would put every tap up to twice its distance off. Those
 boards' backends own the inverse transform, and the touch path asks for it:
 
@@ -788,10 +797,12 @@ pixel-identical at 240×320 at each step:
     renders a 60px header, 60px rows, 32px body text, an 80×60 app-exit button and 66×65 keyboard keys.
 
     The scale is 1 on every board that predates this one, so those layouts are bit-identical and no
-    build flag was needed: esp32, esp32s3 and `waveshare-s3-lcd21b` all declare a 240×320 canvas (the
+    build flag was needed: esp32, esp32s3 and `waveshare-s3-lcd21b` all declared a 240×320 canvas (the
     Waveshare's 480×480 panel is addressed through its round-aperture upscale, not a larger canvas),
     and 240×135 resolves to 0 and clamps up to 1. `tools/preview/test_layout.py` still pins every
-    historical 240×320 / 240×135 value and passes unchanged.
+    historical 240×320 / 240×135 value and passes unchanged. (The Waveshare's canvas has since been
+    retuned to 201×268 for a larger UI; `s` is still 1 there, because the board grows by aperture
+    scale rather than by scale factor — see §2.5.1.)
 
     Text is scaled *separately*, by the backend rather than by ~200 call sites: `kryon_text` already
     takes a `size` (TFT_eSPI's `textsize`) through `setTextSize()`, and `KryonSprite` feeds it into the

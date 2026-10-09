@@ -6,6 +6,8 @@
 
 . 'C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1'
 
-Set-Location 'D:\KryonOS-fork\idf'
+# Resolved from this script's own location rather than hard-coded, so the tree can live on any drive
+# and a moved checkout cannot silently build the wrong project.
+Set-Location (Split-Path $PSScriptRoot -Parent)
 idf.py build
 exit $LASTEXITCODE

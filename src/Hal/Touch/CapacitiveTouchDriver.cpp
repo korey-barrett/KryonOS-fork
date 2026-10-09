@@ -223,7 +223,7 @@ bool Cst816Driver::probe() {
     // and in which it stops acknowledging I2C.
     //
     // The reference port for this board does this at init and we did not
-    // (D:\KryonOS .../waveshare_2_1/cst820.cpp begin(): writeReg(REG_DIS_AUTOSLEEP, 0x01)). Note what
+    // (X:\KryonOS .../waveshare_2_1/cst820.cpp begin(): writeReg(REG_DIS_AUTOSLEEP, 0x01)). Note what
     // that port says about it: its reads are DELIBERATELY ungated on INT, because "the I2C traffic is
     // itself the wake-up" -- so a sleeping part is woken by the very read that would find it asleep,
     // and this write is not by itself the explanation for dead touch. It is here because the vendor
@@ -252,7 +252,7 @@ bool Cst816Driver::readPoint(uint16_t* x, uint16_t* y) {
     //
     // Both references agree, which is what makes this the bug rather than a guess: the port this
     // board was written against reads the payload in one burst for exactly this reason
-    // (D:\KryonOS .../waveshare_2_1/cst820.cpp: "the 5-byte payload is read in one burst so the
+    // (X:\KryonOS .../waveshare_2_1/cst820.cpp: "the 5-byte payload is read in one burst so the
     // coordinates cannot tear between two I2C transactions"), and the vendor driver it was itself
     // written against -- esp_lcd_touch_cst816s -- reads data_t through a single rx_param call.
     // readRegBytes is the same repeated-start handshake they use, not a STOP followed by a read.

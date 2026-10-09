@@ -87,14 +87,25 @@ public:
     // it. The blit upscales the canvas by SCALE_NUM/SCALE_DEN into a rect centred on the panel, and
     // the touch path inverts exactly that transform to get canvas pixels back.
     //
-    // 6/5 is the largest uniform scale that keeps the whole canvas inside the bezel. A 240x320
-    // canvas has a half-diagonal of sqrt(120^2 + 160^2) = 200 px, so it can grow to 200 * 6/5 = 240
-    // px -- exactly the bezel radius, with all four corners landing on the circle. Larger scales are
-    // cut by the round edge, and they go fast: at 1.4x only the middle 51% of the top edge is still
-    // inside the circle, and at 1.5x the entire top and bottom edges fall outside it, which would
-    // take the footer bar with them.
-    static constexpr int16_t SCALE_NUM = 6;
-    static constexpr int16_t SCALE_DEN = 5;
+    // The ratio is set by the canvas so that the inscribed rect always lands its four corners
+    // EXACTLY on the bezel -- any scale smaller leaves a black ring, any larger is cut by the round
+    // edge, and the cut goes fast: push past it and the corners leave the glass first, which is what
+    // takes the footer's UP and DN thirds with them.
+    //
+    // The canvas is 3:4, so it is parametrised as W x H = 3m x 4m and its half-diagonal is 2.5m. The
+    // corners land on the circle when 2.5m * NUM/DEN = 240, which for NUM/DEN = 96/67 gives m = 67:
+    // a 201x268 canvas with a half-diagonal of sqrt(100.5^2 + 134^2) = 167.5 px, growing to
+    // 167.5 * 96/67 = 240 px -- the bezel radius. That rect is 201 * 96/67 = 288 by 268 * 96/67 =
+    // 384, i.e. the same 288x384 as before.
+    //
+    // THAT is the invariant worth keeping in mind when retuning: for ANY 3:4 canvas the blit is
+    // exactly 288x384 and only the magnification k = 96/m changes. A smaller canvas therefore does
+    // not shrink the picture, it enlarges it -- 240x320 at 6/5 and 201x268 at 96/67 put the same
+    // 288x384 rect on the glass at 1.2x and 1.433x. What does NOT move with k is anything sized as a
+    // fraction of the rect: keyboard key width stays blitW/kbCols, so at the board's 6 columns it is
+    // 48 px on the glass at every canvas size. See the canvas note in platformio.ini.
+    static constexpr int16_t SCALE_NUM = 96;
+    static constexpr int16_t SCALE_DEN = 67;
 
     // Forward edge: the first PANEL offset that displays canvas pixel c. This is the CEILING of
     // c*SCALE_NUM/SCALE_DEN, not the floor -- the floor is the natural thing to write and it is wrong

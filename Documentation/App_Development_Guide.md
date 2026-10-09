@@ -71,21 +71,23 @@ The `main.js` file is the entry point of your application. When a user clicks yo
 Because KryonOS handles the underlying C++ translation, you can write simple, high-level JavaScript to draw graphics, read files, and trigger UI components.
 
 ### Your First App (`main.js`)
-Here is a simple example that turns the screen blue, prints "Hello KryonOS!", waits 3 seconds, and then gracefully exits back to the Launcher:
+Here is a simple example that turns the screen blue and prints "Hello KryonOS!":
 
 ```javascript
 // Clear the screen
-Graphics.fillScreen(Graphics.COLOR_BLUE);
+System.fillScreen(System.color(0, 0, 255));
 
-// Draw some text in the center
-Graphics.setTextColor(Graphics.COLOR_WHITE);
-Graphics.drawString("Hello KryonOS!", 120, 160, 2);
+// Draw some text, centered. x, y is the TOP-LEFT corner of the string -- not its center -- and
+// the runtime has no text-measuring call, so 92 x 16 is "Hello KryonOS!"'s own size in font 2,
+// summed from the font's advance table.
+System.setTextColor(System.color(255, 255, 255));
+System.drawString("Hello KryonOS!", (System.screenWidth() - 92) / 2, (System.screenHeight() - 16) / 2, 2);
 
 // Wait for 3 seconds
 System.delay(3000);
 
-// Close the app and return to the OS Launcher
-System.exit();
+// Return to the OS Launcher with the exit button in the top-right corner. There is no
+// JS-side `exit()` call: the Kernel aborts the JS engine itself when that corner is tapped.
 ```
 
 > [!IMPORTANT]  
