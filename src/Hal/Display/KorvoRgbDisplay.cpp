@@ -92,7 +92,27 @@ void buildPanelConfig(esp_lcd_rgb_panel_config_t* cfg) {
 // =================================================================================================
 
 KorvoRgbDisplay::KorvoRgbDisplay(int16_t width, int16_t height)
-    : nativeW_(width), nativeH_(height), w_(width), h_(height) {}
+    : nativeW_(width), nativeH_(height), w_(width), h_(height) {
+    // Tell the shim which display it stands for, and re-point the canvas. Both were missing, and
+    // both matter.
+    //
+    // nativeTft() hands out &native_, and a sprite is built as `new TFT_eSprite(native)`, whose
+    // constructor resolves its push target through native->display(). On a default-constructed shim
+    // that is nullptr, KryonSprite::pushSprite() returns immediately on a null target, and so EVERY
+    // pushSprite() became a silent no-op.
+    //
+    // That is what froze the Cube3d demo: the app draws entirely through a bound sprite, so it
+    // rendered frame after frame into its buffer and nothing ever reached the panel -- the screen
+    // kept showing the menu drawn directly at start. The serial log showed the 800x32 framebuffer
+    // being created once per frame with no panic and no watchdog, which is exactly what a dropped
+    // push looks like.
+    //
+    // canvas_ is constructed in the member-init list, i.e. BEFORE this body runs, so it captured the
+    // same null target and is re-pointed here for the same reason. This also affects
+    // NotificationManager's card and shadow sprites, not just JS apps.
+    native_.setDisplay(this);
+    canvas_.setTarget(this);
+}
 
 KorvoRgbDisplay::~KorvoRgbDisplay() {
     if (canvas_.created()) canvas_.deleteSprite();
