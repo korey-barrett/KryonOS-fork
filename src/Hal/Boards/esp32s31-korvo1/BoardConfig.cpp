@@ -6,8 +6,9 @@
 // the positive TARGET_ESP32S31_KORVO1 macro rather than an inverse "none of the others" test: an
 // inverse test silently breaks the moment a new TARGET_* board is added and forgotten here.
 //
-// Only the IDF build defines that macro (see idf/main/CMakeLists.txt), so under PlatformIO this is an
-// empty translation unit and the seven existing environments are untouched.
+// `[env:esp32s31-korvo1]` defines that macro, so under PlatformIO this is the *active* board
+// implementation for that one environment; the other environments compile it to nothing and are
+// untouched. The IDF build defines it too (see idf/main/CMakeLists.txt).
 //
 // Like the Waveshare board, this one has exactly ONE possible backend, and it is not a TftEspiDisplay:
 // TFT_eSPI cannot drive an RGB parallel panel at all, and on this target it is a rasterizer-only shim

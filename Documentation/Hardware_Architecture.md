@@ -26,10 +26,11 @@ own `TARGET_*` name for real hardware (see `Display_Touch_Architecture.md` §6).
 
 | Board Target | Environment Name | MCU | Flash / PSRAM | Display | Input Device | App partition |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **ESP32-S3 default** *(primary)* | `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16MB / 8MB OPI | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 6.5 MB |
+| **ESP32-S3 default** *(primary)* | `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16MB / 8MB OPI | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 6.25 MB |
 | **ESP32 default** | `esp32-default` | ESP32 (Xtensa LX6) | 4MB / None | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 3 MB (`huge_app.csv`) — **no OTA** |
 | **ESP32-CYD-28** *(one product)* | `esp32-cyd-28` | ESP32 (Xtensa LX6) | 4MB / None | ILI9341 SPI, 240x320 | XPT2046 Touch (bit-banged) | 1.875 MB ×2 slots (`min_spiffs.csv`) |
-| **ESP32-S31** *(preview)* | `esp32s31-default` | ESP32-S31 (RISC-V) | 16MB / 16MB OPI | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 16 MB table |
+| **ESP32-S31-Korvo-1** *(preview)* | `esp32s31-korvo1` | ESP32-S31 (RISC-V) | 16MB / 16MB OPI | 800x480 **RGB parallel** | GT1151 capacitive touch (I2C) | 6.25 MB |
+| **ESP32-S31** *(placeholder)* | `esp32s31-default` | ESP32-S31 (RISC-V) | 16MB / 16MB OPI | generic ILI9341 SPI, 240x320 | XPT2046 Touch | 16 MB table |
 | **Waveshare ESP32-S3-Touch-LCD-2.1B** *(preview)* | `waveshare-s3-lcd21b` | ESP32-S3 (Xtensa LX7) | 16MB / 8MB OPI | ST7701 480x480 **RGB parallel** | CST820 capacitive touch (I2C) | 16 MB table |
 
 The Waveshare row is the one target that is a specific product rather than a generic bring-up board, and
@@ -71,7 +72,6 @@ The upstream board ports are kept as inert templates — their implementations c
 | :--- | :--- | :--- | :--- | :--- |
 | M5Stack Cardputer v1.1 | `examples/cardputer.ini` | ESP32-S3 (Stamp-S3) | ST7789V2 240x135 SPI | 56-key matrix keyboard |
 | LilyGO T-HMI | `examples/t_hmi.ini` | ESP32-S3 | ST7789 240x320 8-bit parallel | XPT2046 Touch |
-| ESP32-CYD-28 | `examples/cyd.ini` | ESP32 | ILI9341 240x320 SPI | XPT2046 Touch |
 
 ---
 
@@ -88,6 +88,9 @@ src/Hal/
 │   │   ├── BoardConfig.h
 │   │   └── BoardConfig.cpp
 │   ├── esp32s31/                       <-- ESP32-S31 default board (TARGET_ESP32S31_DEFAULT)
+│   ├── esp32s31-korvo1/                <-- ESP32-S31-Korvo-1 (TARGET_ESP32S31_KORVO1) — env esp32s31-korvo1
+│   │   ├── BoardConfig.h
+│   │   └── BoardConfig.cpp
 │   ├── waveshare-s3-lcd21b/            <-- Waveshare ESP32-S3-Touch-LCD-2.1B (TARGET_WAVESHARE_S3_LCD21B)
 │   │   ├── BoardConfig.h
 │   │   └── BoardConfig.cpp
@@ -191,5 +194,6 @@ because the RGB timings are written from it, and it is not editable as a build f
 288x384 as long as the canvas keeps its 3:4 aspect — shrink the canvas and the same picture lands
 bigger, with the panel still scanning 480x480 either way. See `Display_Touch_Architecture.md` §2.5.
 
-The reference boards (`m5stack-cardputer`, `lilygo-t-hmi`, `esp32-cyd-28`) are no longer active
-environments; their snippets and implementations are kept as unbuilt examples (§1.1).
+The reference boards (`m5stack-cardputer`, `lilygo-t-hmi`) are not active environments; their snippets
+and implementations are kept as unbuilt examples (§1.1). The CYD is active — its snippet lives in
+`board_configs/cyd.ini`, not under `examples/` — and is listed with the other environments in §1.

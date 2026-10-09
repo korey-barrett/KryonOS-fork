@@ -13,7 +13,7 @@ panel + XPT2046 touch), not a specific product — copy it and give it your own 
 
 | Environment | Chip | Flash/PSRAM | Core / IDF | In `default_envs` | App partition |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | yes | 6.5 MB — ample headroom |
+| `esp32s3-default` | ESP32-S3 (Xtensa LX7) | 16 MB / 8 MB | Arduino 3.3.12 / IDF 5.5.5 | yes | 6.25 MB — ample headroom |
 | `esp32-default` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | yes | 3 MB (`huge_app.csv`), no OTA slot |
 | `esp32-cyd-28` | ESP32 (Xtensa LX6) | 4 MB / none | Arduino 3.3.12 / IDF 5.5.5 | **no — one product** | 1.875 MB ×2 OTA slots (`min_spiffs.csv`) |
 | `esp32s31-default` | ESP32-S31 (RISC-V) | 16 MB / 16 MB | Arduino 4.0.0-RC1 / IDF 6.1 | **no — preview** | 16 MB table (`default_16MB.csv`) |
@@ -168,10 +168,13 @@ one object is simultaneously the driver and the interface; `KryonDisplay::native
 the code that genuinely needs TFT_eSPI (sprite allocation, `Xpt2046TftDriver`), and returns `nullptr`
 on a backend that has none.
 
-Two things still reach for TFT_eSPI and are deliberately left that way for now: every UI file keeps
-`#include <TFT_eSPI.h>` for the `TFT_*` colour and `*_DATUM` macros, and notification/JS sprites are
-still `TFT_eSprite`, which needs a `TFT_eSPI*` — hence `nativeTft()` and the graceful no-op when it is
-null. Decoupling the macros and adding a backend-neutral `KryonSprite` are follow-ups.
+Two things still reach for TFT_eSPI on the boards that have it, and are deliberately left that way:
+every UI file keeps `#include <TFT_eSPI.h>` for the `TFT_*` colour and `*_DATUM` macros, and
+notification/JS sprites are `TFT_eSprite` — which needs a `TFT_eSPI*`, hence `nativeTft()` and the
+graceful no-op when it is null. A backend-neutral `KryonSprite` now exists for targets without the real
+library (`src/Hal/Display/KryonSprite.{h,cpp}`, compiled where `KRYONOS_KRYON_SPRITE` is set, and
+composed of `RamFramebufferDisplay` plus the ported text engine); what remains a follow-up is
+decoupling the `TFT_*` macros from the UI files.
 
 Exactly one board implementation defines the object. There is one default implementation **per chip
 type**, each behind a positive guard set by its environment in `platformio.ini`:
@@ -433,7 +436,8 @@ The drivers live in `src/Hal/Touch/`:
 | `Xpt2046BitbangDriver.{h,cpp}` | Four-GPIO bit-banged XPT2046 (the historical implementation). |
 | `Xpt2046TftDriver.{h,cpp}` | XPT2046 via TFT_eSPI's own touch path. |
 | `NullTouchDriver.h` | No panel; reports no touch. |
-| `CapacitiveTouchDriver.{h,cpp}` | FT6236 / GT911 / CST816 over I²C. The CST816 path is selected by the Waveshare 2.1B, whose CST820 answers to the same map; none of the three has been run against a real panel yet. |
+| `CapacitiveTouchDriver.{h,cpp}` | FT6236 / GT911 / **GT1151** / CST816 over I²C. The CST816 path is selected by the Waveshare 2.1B, whose CST820 answers to the same map. The GT1151 is the S31-Korvo-1's controller — the part reports itself as a GT1158 — and is the first of the four driven against a real panel; the other three are implemented at register level and have no panel to be tested against. |
+| `EspLcdTouchDriver.{h,cpp}` | An adapter over an `esp_lcd_touch` handle rather than a register map. Compiled only where `KRYONOS_TOUCH_USE_ESP_LCD` is defined, which is the IDF build's S31 path; the PlatformIO S31 environment uses `Gt1151Driver` above instead. |
 
 Selection is the string build flag `KRYONOS_TOUCH_DRIVER`. Left unset it is `auto`, which reproduces
 the old compile-time ladder exactly — so every pre-existing board keeps the driver it already used
@@ -846,7 +850,8 @@ pixel-identical at 240×320 at each step:
   `esp32-default` build, and the S3 target also builds with
   `-D KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RAM`. Two caveats: the RAM rasterizer compiles and binds
   but has never been run, and it embeds no font, so it draws geometry only. `KryonSprite` (a
-  backend-neutral sprite) and removing the remaining `TFT_*` macro dependency are outstanding.
+  backend-neutral sprite) is now in `src/Hal/Display/`, and is what the S31's RGB backend draws into
+  and pushes from; removing the remaining `TFT_*` macro dependency is still outstanding.
 - **Phase 6** — new-board recipe hardening, CI build matrix, and a gate that fails on reintroduced
   hard-coded dimensions. The CI/OTA registration half is done: `OTAManager::getBoardTargetName()` now
   returns `KRYONOS_BOARD_ID` directly instead of a `TARGET_*` ladder, `release.yml` derives the
