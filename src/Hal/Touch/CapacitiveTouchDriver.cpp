@@ -370,10 +370,26 @@ bool Gt1151Driver::readPoint(uint16_t* x, uint16_t* y) {
         return false;
     }
 
-    // The record begins at offset 1: byte 0 is the id nibble and four reserved bits, then X and Y
-    // little-endian, then strength, then a spare. X and Y are native panel pixels -- the controller is
-    // configured with the panel's own size -- so neither is masked, unlike the GT911's 12-bit fields.
-    *x = (uint16_t)(buf[1] | ((uint16_t)buf[2] << 8));
-    *y = (uint16_t)(buf[3] | ((uint16_t)buf[4] << 8));
+    // The frame read from 0x814E is laid out exactly as esp_lcd_touch_gt1151's packed structs
+    // describe it:
+    //
+    //   buf[0]      touch count (low nibble)
+    //   buf[1]      track id (low nibble) + four reserved bits  <- the RECORD starts here
+    //   buf[2..3]   X, little endian                            <- but X starts at 2, not 1
+    //   buf[4..5]   Y, little endian
+    //   buf[6..7]   strength
+    //   buf[8]      spare
+    //   buf[9..10]  checksum
+    //
+    // Taking X from the record's first byte rather than the field's is an off-by-one, and it is the
+    // kind that does not look like one: X becomes (id | x_low << 8) and Y becomes (x_high | y_low <<
+    // 8). Both are plausible numbers, mostly outside the canvas, and toCanvas() clamps rather than
+    // rejects -- so every tap lands on an edge and the panel reads as dead instead of as wrong.
+    //
+    // X and Y are native panel pixels and are not masked, unlike the GT911's 12-bit fields:
+    // esp_lcd_touch uses x_max/y_max only for mirroring, so the values the BSP consumed were the raw
+    // ones too.
+    *x = (uint16_t)(buf[2] | ((uint16_t)buf[3] << 8));
+    *y = (uint16_t)(buf[4] | ((uint16_t)buf[5] << 8));
     return true;
 }
