@@ -85,7 +85,7 @@
 
 <h2>Features</h2>
 <ul>
-  <li><strong>JavaScript App Runtime (v2.0.0 / API Level 2):</strong> Execute interactive, standalone JS apps natively on the ESP32 using the optimized Duktape ECMAScript engine.</li>
+  <li><strong>JavaScript App Runtime (API Level 2):</strong> Execute interactive, standalone JS apps natively on the ESP32 using the optimized Duktape ECMAScript engine.</li>
   <li><strong>Multi-Board Hardware Abstraction Layer (HAL):</strong> Unified hardware architecture with out-of-the-box support for touch screens, parallel displays, matrix keyboards, and multi-bus SD cards.</li>
   <li><strong>KryonCloud Services &amp; On-Device AI Engine (<code>Kryon.ai</code> / <code>System.ai</code>):</strong> Real-time token streaming (<code>SSE</code>), structured JSON extraction, and vision processing directly on device.</li>
   <li><strong>KryonBeam Mesh Messenger:</strong> Hardware-to-hardware communication across paired devices with broadcast and direct messaging channels.</li>

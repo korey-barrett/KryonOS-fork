@@ -684,14 +684,28 @@ is a `KryonDisplay` backend built on `esp_lcd` (Phase 5, §7).
    - the `matrix.board` list and the bootloader-offset `case` in `.github/workflows/release.yml`;
    - the `target_board` choices, the `ota_*` toggles and the `ota_flags` / `all_boards` maps in
      `.github/workflows/push-update.yml`;
-   - the `"boards"` keys in `updates/esp32/v2/update.json`.
+   - the `"boards"` keys in **the manifest for the board's chip variant**.
 
-   The string must be spelled identically in all three, because the firmware reports itself under
-   exactly one name: `KRYONOS_BOARD_ID` in `src/Hal/Display/DisplayConfig.h`, returned verbatim by
-   `OTAManager::getBoardTargetName()` and used as the manifest lookup key. There is deliberately no
+   **The manifest is per-variant, and that is the part easily missed.** There is no single
+   `updates/esp32/v2/update.json` for everything: each chip has its own branch — `esp32`, `esp32s3`,
+   `esp32s31` — and the firmware fetches
+   `.../refs/heads/<variant>/updates/<variant>/v2/update.json`, where `<variant>` comes from
+   `KRYONOS_OTA_VARIANT` and defaults to `esp32`. So a new S31 board's entry goes in
+   `updates/esp32s31/v2/update.json` on the `esp32s31` branch, and its environment must set
+   `-D KRYONOS_OTA_VARIANT="esp32s31"`. A board that sets nothing reads the classic-ESP32 manifest
+   and finds no entry for itself — which is a silent fallback to the baseline release, not an error.
+   Check the file exists on the branch before trusting the registration: this is exactly how the
+   `esp32s31` branch came to advertise a manifest nobody had ever written, and how `esp32s3`'s still
+   does.
+
+   The name must be spelled identically in all three places, because the firmware reports itself
+   under exactly one name: `KRYONOS_BOARD_ID` in `src/Hal/Display/DisplayConfig.h`, returned verbatim
+   by `OTAManager::getBoardTargetName()` and used as the manifest lookup key. There is deliberately no
    second copy of the name in the OTA code — a parallel `TARGET_*` ladder in `OTAManager` is how the
    manifest and the build matrix drifted apart before, leaving a board whose manifest entry no device
-   ever asked for. When adding the manifest entry, seed it with `"supports_ota": false` and a `guide`
+   ever asked for. (That ladder is back as of `3260bac` and was removed again in `1f3062b`; if these
+   two ever disagree again, believe `KRYONOS_BOARD_ID`.) When adding the manifest entry, seed it with
+   `"supports_ota": false` and a `guide`
    until a release exists that actually carries binaries named for the new environment; `push-update.yml`
    promotes the board to `true` and fills in `firmware_url` / `firmware_size` / `firmware_md5` from the
    downloaded assets on its next run. Leaving an entry with `supports_ota: true` and no matching release
