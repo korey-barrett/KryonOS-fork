@@ -2,7 +2,7 @@
 
 The tests run against the real documentation files in the repository. They verify that the
 collector discovers the expected markdown files, that heading normalization works, and that the
-four handoff documents -- the ones that actually describe this fork -- yield scope content.
+handoff documents -- the ones that actually describe this fork -- yield scope content.
 """
 
 import sys
@@ -20,7 +20,7 @@ from parse_project_scope import (  # noqa: E402
     process_file,
 )
 
-FOUR_FILES = ["README.md", "handoff/project.md", "handoff/readme.md", "handofffail.md"]
+SCOPE_FILES = ["README.md", "handoff/project.md", "handoff/readme.md"]
 
 
 def test_repo_root_is_the_repository() -> None:
@@ -33,7 +33,7 @@ def test_collect_md_files() -> None:
     files = collect_md_files(repo_root)
     rel = {p.relative_to(repo_root).as_posix() for p in files}
 
-    # The four scope documents the request named.
+    # The scope documents the request named.
     for name in SCOPE_DOCS:
         assert name in rel, f"Expected scope document {name} to be discovered"
 
@@ -51,9 +51,9 @@ def test_collect_md_files() -> None:
 
 
 def test_collect_named_files_restricts_and_reports_missing() -> None:
-    found, missing = collect_named_files(repo_root, FOUR_FILES + ["does/not/exist.md"])
+    found, missing = collect_named_files(repo_root, SCOPE_FILES + ["does/not/exist.md"])
     got = {p.relative_to(repo_root).as_posix() for p in found}
-    assert got == set(FOUR_FILES)
+    assert got == set(SCOPE_FILES)
     assert missing == ["does/not/exist.md"]
 
 
@@ -63,8 +63,8 @@ def test_collect_named_files_rejects_ignored_paths() -> None:
     assert missing == [".pio/does-not-matter.md"]
 
 
-def test_all_four_named_files_yield_content() -> None:
-    for name in FOUR_FILES:
+def test_all_scope_files_yield_content() -> None:
+    for name in SCOPE_FILES:
         sections = process_file(repo_root / name)
         assert sections, f"{name} produced no sections"
         assert any(v.strip() for v in sections.values()), f"{name} produced only empty sections"
@@ -90,15 +90,6 @@ def test_handoff_readme_goal() -> None:
     assert goal, "handoff/readme.md should yield 'goals' from 'The goal this serves'"
     assert "Korvo-1" in goal
     assert "constraints" in sections, "'Constraints to carry into the new session' should map"
-
-
-def test_handofffail_uses_bold_lead_headings() -> None:
-    # handofffail.md has no ATX headings below its title: its sections are bold-lead paragraphs.
-    sections = process_file(repo_root / "handofffail.md")
-    scope = sections.get("scope", "")
-    assert scope, "handofffail.md should yield 'scope' from '**Session Overview**'"
-    assert "markdown" in scope.lower() or "parse" in scope.lower()
-    assert "open_items" in sections, "'**Current Pending Actions**' should map to 'open_items'"
 
 
 def test_readme_yields_prose_not_markup() -> None:

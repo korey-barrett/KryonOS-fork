@@ -1,8 +1,8 @@
 """Parse the project's scope documents and extract project scope information.
 
-Discover the documents that state what this project is -- the four paths in ``SCOPE_DOCS``
-(the root ``README.md`` and the handoff capture under ``handoff/`` and ``handofffail.md``),
-plus ``CONTRIBUTING.md`` and every ``*.md`` under ``Documentation/`` -- pull out the
+Discover the documents that state what this project is -- the paths in ``SCOPE_DOCS`` (the
+root ``README.md`` and the handoff capture under ``handoff/``), plus ``CONTRIBUTING.md`` and
+every ``*.md`` under ``Documentation/`` -- pull out the
 scope-bearing sections of each, and write a summary in either JSON or plain markdown.
 
 The handoff documents are the ones that actually describe this fork: ``handoff/project.md``
@@ -16,7 +16,7 @@ Usage::
 ``--files`` restricts the run to the named repository-relative paths, e.g.::
 
     python tools/parse_project_scope.py --files README.md handoff/project.md \\
-        handoff/readme.md handofffail.md
+        handoff/readme.md
 
 If ``--output`` is ``json`` (default) the result is written to ``project-scope.json`` in the
 repository root. ``md`` produces ``PROJECT_SCOPE.md`` -- a concatenated markdown summary.
@@ -42,7 +42,6 @@ SCOPE_DOCS: List[str] = [
     "README.md",
     "handoff/project.md",
     "handoff/readme.md",
-    "handofffail.md",
 ]
 
 #: Canonical section key -> the normalized headings that produce it. Headings are compared after
@@ -190,10 +189,11 @@ def _normalize_heading(text: str) -> str:
 def _para_pseudo_heading(node: Dict) -> Optional[str]:
     """Return the heading text if a paragraph is a bold-lead pseudo-heading, else ``None``.
 
-    ``handofffail.md`` has no ATX headings below its title; its sections are ``**Session
-    Overview**`` and ``**Current Pending Actions**``, which mistune renders as a paragraph whose
-    only child is a ``strong``. Treating that as a heading is what lets the file contribute real
-    sections instead of one fallback blob.
+    A document can carry its sections as bold-lead paragraphs -- ``**Session Overview**`` on a line
+    of its own -- rather than as ATX headings. mistune renders that as a paragraph whose only child
+    is a ``strong``; treating it as a heading is what lets such a file contribute real sections
+    instead of one fallback blob. No document in the current source set does this, but the shape is
+    common enough in notes and handoffs to be worth keeping correct.
     """
     children = node.get("children") or []
     if not children or children[0].get("type") != "strong":
