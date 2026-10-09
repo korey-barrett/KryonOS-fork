@@ -4,10 +4,11 @@
 .vscode/launch.json
 .vscode/ipch
 
-# Editor-local config. Both name paths and ports that differ per machine — the absolute toolchain
-# and IDF locations, the local clangd, the debug adapter's COM port — so neither belongs in the tree.
+# Editor-local config. These name paths and ports that differ per machine — the absolute toolchain
+# and IDF locations, the local clangd, the debug adapter's COM port — so none belongs in the tree.
 .vscode/settings.json
 .clangd
+.claude/settings.local.json
 
 # PC-side layout preview output (regenerate with tools/preview/preview.py)
 tools/preview/out/
