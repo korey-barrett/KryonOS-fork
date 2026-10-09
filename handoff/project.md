@@ -51,25 +51,38 @@ Claude mentions on the remote, no `.claude/`, no `CLAUDE.md`.
 
 ## 3. Hardware in play
 
-| Port | Board | Notes |
-|---|---|---|
-| COM4 | Waveshare ESP32-S3-Touch-LCD-2.1B | 480x480 round ST7701 RGB panel, CST820 touch. **The board in active use.** |
-| COM5 | ESP32-S31-Korvo-1 | the port target |
-| COM6 | ESP32 CYD2USB ("CYD", 2.8") | classic ESP32-D0WD-V3 rev 3.1, 4 MB flash, MAC `a4:f0:0f:5c:b7:bc` |
+**Port numbers do not survive an OS reinstall.** The Windows 11 reinstall of 2026-10-09 reassigned
+them, so the COM4 / COM5 / COM6 mapping in the 2026-10-07 capture is void. Re-enumerate before every
+flash — `[System.IO.Ports.SerialPort]::GetPortNames()` — rather than carrying a number forward.
 
-**Only COM6 goes through an `esp_usb_board` bridge**, and that is the whole basis of the boot-mode
+The only serial device present on 2026-10-10, and the port the S31 bring-up is using:
+
+| Port | Board | Bridge identity |
+|---|---|---|
+| COM3 | ESP32-S31-Korvo-1 (stated by the user, 2026-10-10) | Silicon Labs CP210x, `USB\VID_10C4&PID_EA60\F4EDDE590D72F01185C5FF9E1045C30F` |
+
+The enumeration identifies the **bridge**, not the board, so which board sits on a port is not
+something the port tells you. Re-check the number before flashing: the next reinstall, or a different
+USB socket, moves it again.
+
+| Board | Board-specific rule |
+|---|---|
+| Waveshare ESP32-S3-Touch-LCD-2.1B | 480x480 round ST7701 RGB panel, CST820 touch. Auto-resets over its own USB-serial; flashed plainly with `pio run -e waveshare-s3-lcd21b -t upload --upload-port <port>`. |
+| ESP32-S31-Korvo-1 | the port target |
+| ESP32 CYD2USB ("CYD", 2.8") | classic ESP32-D0WD-V3 rev 3.1, 4 MB flash, MAC `a4:f0:0f:5c:b7:bc` |
+
+**Only the CYD goes through an `esp_usb_board` bridge**, and that is the whole basis of the boot-mode
 rule. Two consequences:
 
 - **Boot mode must be enabled manually** before any esptool operation on the CYD, and re-enabled after
   one.
 - **In manual boot mode the application is not running** — only an esptool-ready ROM bootloader. So
-  runtime serial logs are **impossible** on the CYD. Opening COM6 parks the chip regardless of DTR/RTS.
-  A capture returns only the 30-byte `ets Jul 29 2019 12:21:46` ROM banner.
+  runtime serial logs are **impossible** on the CYD. Opening the CYD's port parks the chip regardless
+  of DTR/RTS. A capture returns only the 30-byte `ets Jul 29 2019 12:21:46` ROM banner.
 
-**COM4 does not work this way.** The 2.1B auto-resets over its own USB-serial and is flashed plainly
-with `pio run -e waveshare-s3-lcd21b -t upload --upload-port COM4`. The user confirmed on 2026-10-07
-that the boot-mode confirmation rule is CYD-only. Never pass `--before`/`--after` reset flags on
-either board.
+**The 2.1B does not work this way.** It auto-resets over its own USB-serial. The user confirmed on
+2026-10-07 that the boot-mode confirmation rule is CYD-only. Never pass `--before`/`--after` reset
+flags on any board.
 
 Toolchain lives at `C:\Users\korey\.platformio\penv\Scripts\` — `pio.exe`, `python.exe`, and
 **`esptool.exe`** (not `esptool.py`; esptool v5.4.0).
@@ -161,7 +174,7 @@ Partition arithmetic worth keeping:
 - `nvs` is at 0x9000 in both tables, so **WiFi credentials survive** a table change.
 - `spiffs` moves 0x310000 → 0x3D0000, so **LittleFS contents do not** — the first flash of the new
   table wipes installed apps.
-- The partition table **cannot be changed by OTA**. One wire-flash over COM6 is mandatory before any
+- The partition table **cannot be changed by OTA**. One wire-flash over the CYD's USB port is mandatory before any
   in-place update can work. That has been done.
 - LittleFS is now 128 KB (down from 896 KB under `huge_app`). That is arithmetic, not a config choice:
   4 MB cannot hold a 3 MB app, ~900 KB of filesystem, *and* two 1.9 MB OTA slots.
@@ -195,7 +208,7 @@ and `OTAManager.cpp` is now upstream's file with the single manifest-URL express
 
 ## 6. The Waveshare 2.1B display work (current focus)
 
-All of §6 landed 2026-10-07 and is verified on hardware on COM4, except where noted.
+All of §6 landed 2026-10-07 and is verified on hardware on the Waveshare 2.1B, except where noted.
 
 ### 6.1 The UI is 1.2x larger
 
