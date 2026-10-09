@@ -129,7 +129,7 @@ Each environment's `build_flags` configure TFT_eSPI. The active ESP32-S3 default
 ```
 
 The *active* places these flags live are `platformio.ini` itself (`esp32s3-default`,
-`esp32-default`, `esp32s31-default`, `waveshare-s3-lcd21b`) plus the board snippets under
+`esp32-default`, `esp32s31-korvo1`, `esp32s31-default`, `waveshare-s3-lcd21b`) plus the board snippets under
 `src/Hal/Boards/board_configs/` that are listed in `[platformio] extra_configs` — today that is
 `cyd.ini` (`esp32-cyd-28`). Registering a snippet there makes it buildable with
 `pio run -e <name>` without adding it to `default_envs`, so a bare `pio run` still builds only the
@@ -186,6 +186,7 @@ type**, each behind a positive guard set by its environment in `platformio.ini`:
 | `esp32-default` | `TARGET_ESP32_DEFAULT` | `src/Hal/Boards/esp32/BoardConfig.cpp` |
 | `esp32-cyd-28` | `TARGET_CYD` | `src/Hal/Boards/cyd/BoardConfig.cpp` |
 | `waveshare-s3-lcd21b` | `TARGET_WAVESHARE_S3_LCD21B` | `src/Hal/Boards/waveshare-s3-lcd21b/BoardConfig.cpp` |
+| `esp32s31-korvo1` | `TARGET_ESP32S31_KORVO1` | `src/Hal/Boards/esp32s31-korvo1/BoardConfig.cpp` |
 
 > **Trap:** these files used to be guarded by an *inverse* condition
 > (`#if !defined(TARGET_CARDPUTER) && !defined(TARGET_CYD) && !defined(TARGET_T_HMI)`). Adding a new
@@ -208,6 +209,15 @@ resolution/rotation work moves this into a single `Display::begin()` so rotation
 profile.
 
 ### 2.5 A non-TFT_eSPI backend: the RGB parallel panel
+
+There are **two** RGB backends, and the difference between them is what configures the panel.
+`EspLcdRgbDisplay` (the rest of this section) is the Waveshare 2.1B's, and it has to reverse-engineer
+its panel: a register map, an init table, a GPIO expander. `KorvoRgbDisplay`
+(`src/Hal/Display/KorvoRgbDisplay.{h,cpp}`) is the ESP32-S31-Korvo-1's, and it configures nothing by
+hand — pins, timings and frame-buffer count are vendored into it from Espressif's `esp32_s31_korvo_1`
+BSP, because that BSP is not available on the PlatformIO path this board ships on. It also runs with no
+bounce buffer and no second framebuffer, both of which are closed off on the S31; the reasons are in
+`KorvoRgbDisplay.h` and `handoff/project.md` §10–§11.
 
 `esp32s3-default` and `esp32-default` both drive SPI panels through TFT_eSPI, but TFT_eSPI cannot
 drive every panel. The Waveshare ESP32-S3-Touch-LCD-2.1B carries a **480×480 ST7701 on a 16-bit RGB

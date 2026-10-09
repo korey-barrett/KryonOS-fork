@@ -50,14 +50,19 @@ because 4 MB cannot hold a 3 MB app, ~900 KB of files and two 1.9 MB slots at on
 `[platformio] extra_configs`, so build it with `pio run -e esp32-cyd-28`. Its touch is the XPT2046
 bit-banged on four dedicated pins (PENIRQ is unconnected on this board, so the driver reads pressure).
 
-The S31 requires ESP-IDF v6.1, which only arduino-esp32 **4.x** reaches, so `esp32s31-default` pins the
+The S31 requires ESP-IDF v6.1, which only arduino-esp32 **4.x** reaches, so the S31 environments pin the
 pioarduino **pre-release** platform `61.04.00-RC1` (Arduino 4.0.0-RC1 / IDF 6.1) instead of the stable
-`55.03.312-1` the other two use — PlatformIO resolves `platform` per environment, so both cores coexist.
-It is **not** in `default_envs`: the OS still targets the Arduino 3.x API, so build it explicitly with
-`pio run -e esp32s31-default`, and expect to port code before it compiles. As of 2026-10-03 the env
-does not link: the framework's own libraries all compile, then **TFT_eSPI fails with 130 IDF-6.1
-errors** in its legacy ESP32 backend — so the S31 needs an `esp_lcd` display backend, not a newer
-TFT_eSPI. See [Display & Touch Driver Architecture](Display_Touch_Architecture.md) §5.1–5.2.
+`55.03.312-1` the others use — PlatformIO resolves `platform` per environment, so both cores coexist.
+
+`esp32s31-korvo1` is the board, and it **builds and runs**: the 800x480 panel is driven by an `esp_lcd`
+RGB backend and touch by the GT1151, both described in
+[Display & Touch Driver Architecture](Display_Touch_Architecture.md) §2.5 and §3. Build it with
+`pio run -e esp32s31-korvo1`.
+
+`esp32s31-default` is the older chip placeholder and still does not link: the framework's own libraries
+all compile, then **TFT_eSPI fails with 130 IDF-6.1 errors** in its legacy ESP32 backend — which is
+precisely why the `esp_lcd` backend above exists rather than a newer TFT_eSPI. Neither environment is
+in `default_envs`.
 
 The S31 pins in the environment are placeholders mirroring the S3 default — set `TFT_*`/`TOUCH_*` to
 your actual wiring.
