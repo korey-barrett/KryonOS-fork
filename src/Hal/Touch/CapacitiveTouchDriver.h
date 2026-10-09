@@ -144,6 +144,14 @@ private:
     // One line, once. A checksum that fails on every frame is an address or wiring problem rather than
     // a panel one, and saying so beats a controller that looks present but never reports a touch.
     bool checksumWarned_ = false;
+
+    // Raw-coordinate self-report, as Cst816Driver carries -- the first few DISTINCT contacts. Printing
+    // on change rather than on a plain count is the lesson the IDF bring-up diagnostic wrote down
+    // (idf/main/main.cpp): under a count alone a held finger fills the budget in the first second,
+    // every later tap goes unlogged, and working hardware reads as a sensor stuck on one coordinate.
+    uint8_t touchesLogged_ = 0;
+    uint16_t lastLoggedX_ = 0xFFFF;
+    uint16_t lastLoggedY_ = 0xFFFF;
 };
 
 #endif // KRYONOS_CAPACITIVE_TOUCH_DRIVER_H

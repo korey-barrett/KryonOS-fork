@@ -391,5 +391,17 @@ bool Gt1151Driver::readPoint(uint16_t* x, uint16_t* y) {
     // ones too.
     *x = (uint16_t)(buf[2] | ((uint16_t)buf[3] << 8));
     *y = (uint16_t)(buf[4] | ((uint16_t)buf[5] << 8));
+
+    // The first few distinct contacts report their raw coordinates, so a controller that is reporting
+    // something other than panel pixels says so in the boot log instead of presenting as dead or
+    // mis-mapped touch. Same self-report Cst816Driver carries; printed on change so a held finger
+    // cannot spend the whole budget and leave every later tap unlogged.
+    if (touchesLogged_ < 8 && (*x != lastLoggedX_ || *y != lastLoggedY_)) {
+        touchesLogged_++;
+        lastLoggedX_ = *x;
+        lastLoggedY_ = *y;
+        Serial.printf("[TOUCH] gt1151 raw=(%u,%u) num=%u\n", (unsigned)*x, (unsigned)*y,
+                      (unsigned)points);
+    }
     return true;
 }
