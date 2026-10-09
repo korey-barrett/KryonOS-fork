@@ -61,6 +61,7 @@ flash never lands on them.
 | `esp32-default` | `huge_app.csv` | `0x9000` / 20 KB | `0xE000` / 8 KB | `0x10000`, 3 MB — **no second slot, no OTA** | `spiffs` `0x310000` / 896 KB | `0x3F0000` / 64 KB |
 | `esp32-cyd-28` | `min_spiffs.csv` | `0x9000` / 20 KB | `0xE000` / 8 KB | `0x10000` + `0x1F0000`, 1.875 MB each | `spiffs` `0x3D0000` / 128 KB | `0x3F0000` / 64 KB |
 | `esp32s31-default` | `default_16MB.csv` (from the board JSON) | `0x9000` / 20 KB | `0xE000` / 8 KB | `0x10000` + `0x650000` | `spiffs` `0xC90000` | `0xFF0000` / 64 KB |
+| `esp32s31-korvo1` | `default_16MB.csv` (from the board JSON) | `0x9000` / 20 KB | `0xE000` / 8 KB | `0x10000` + `0x650000`, 6.25 MB each | `spiffs` `0xC90000` | `0xFF0000` / 64 KB |
 
 The S31 row's app and filesystem sizes come from the board's own `default_16MB.csv` in the
 `61.04.00-RC1` platform. Only the offsets are fixed by the bootloader; if you change tables, read the

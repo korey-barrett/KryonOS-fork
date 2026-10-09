@@ -34,18 +34,20 @@ delicate part of the codebase — see §6.
 
 | Item | Value |
 |---|---|
-| Working tree | `X:\KryonOS-fork` |
+| Working tree | `X:\KryonOS-fork` — clean |
 | Only remote | `origin` → `https://github.com/korey-barrett/KryonOS-fork.git` |
-| Upstream | `Haris16-code/KryonOS` — **never touch, never add as a remote, never PR against** |
+| Upstream | `Haris16-code/KryonOS` — read-only, never edited here. An upstream PR is now intended; see §8 |
 | Read-only ground truth | `X:\KryonOS` (v2.0.0) — read, never edit |
 | Read-only reference | `X:\esp32s31_korvo1` — the Korvo-1 reference project |
 | Current branch | `main` |
-| Version | `KRYONOS_VERSION` = **2.0.2** (`platformio.ini:49`) |
-| Working tree | clean |
-| Unpushed | **2 commits** — `c7610f9`, `fa70f7b` |
+| Version | `KRYONOS_VERSION` = **2.0.2** (`platformio.ini:57`) |
+| Unpushed | none — `main` and `esp32s31` are level with their remotes |
 
-`main` was force-pushed to `b79a700` on 2026-10-03 to strip Claude attribution. There are **zero**
-Claude mentions on the remote, no `.claude/`, no `CLAUDE.md`.
+`main` was force-pushed to `b79a700` on 2026-10-03 to strip Claude attribution, and there is none on
+the remote of the kind that rule is about — no trailer, no footer, no authorship claim in any tracked
+file. The name does occur once, as `.gitignore`'s machine-local ignore path
+(`.claude/settings.local.json`), which is a config path rather than attribution. There is no `.claude/`
+directory in the tree and no `CLAUDE.md`.
 
 ---
 
@@ -148,11 +150,14 @@ The Waveshare 2.1B's stack, for contrast: platform `55.03.312-1` (= Arduino core
 ### 5.1 Fork-hosted OTA (complete)
 
 - `OTAManager::UPDATE_MANIFEST_URL` is now **composed from the chip variant the board env names**
-  (`KRYONOS_OTA_VARIANT`). The fork's manifests live on per-variant branches — `esp32`, `esp32s3`,
-  `esp32s31` — each holding `updates/<variant>/v2/update.json`. A board that sets no
-  `KRYONOS_OTA_VARIANT` keeps the classic-ESP32 branch, so the file still builds everywhere. This one
-  expression is the only firmware-side change on the OTA path; `TLSHelper` calls `setInsecure()`, so no
-  trust anchor changed.
+  (`KRYONOS_OTA_VARIANT`). The fork's manifests are meant to live on per-variant branches — `esp32`,
+  `esp32s3`, `esp32s31` — each holding `updates/<variant>/v2/update.json`. As of 2026-10-10 only two of
+  those exist — and that was the whole set: the `esp32s3` and `esp32s31` files were both missing, so
+  both branches' `updates/README.md` files described something nobody had written. Both were added on
+  2026-10-10 (the S31 one first, without which the S31 had nothing to read at all). A board that sets
+  no `KRYONOS_OTA_VARIANT` keeps the classic-ESP32 branch, so the file still builds everywhere. This
+  one expression is the only firmware-side change on the OTA path; `TLSHelper` calls `setInsecure()`, so
+  no trust anchor changed.
 - **Release `v2.0.2` published** on the fork: 12 assets, tag at the rewritten `main`.
 - `push-update.yml` has been run for `esp32-cyd-28` only. The other four boards remain at 2.0.1 /
   `supports_ota: false`.
@@ -334,7 +339,8 @@ touching anything:
 
 ## 7. Open items — none of them blocking
 
-1. **Two unpushed commits** — `c7610f9`, `fa70f7b`. The user asks for pushes separately.
+1. **Push handling** — closed. `c7610f9` and `fa70f7b` were pushed on 2026-10-10, and `main` and
+   `esp32s31` are both level with their remotes. The user still asks for pushes separately.
 2. **`AppStoreUI::draw()` blocks the loop through a whole TLS handshake.**
    `AppStoreUI::draw()` calls `fetchCategories()` synchronously before it draws anything
    (`AppStoreUI.cpp:87-99`), with `http.setTimeout(15000)`. It is the one place in the UI that stalls
@@ -356,7 +362,12 @@ touching anything:
 ## 8. Standing rules — verbatim from the user, still binding
 
 - **"do not use the word honestly in this or any future chat sessions. commit to this fork only. do not
-  alter anything on the main repo."**
+  alter anything on the main repo."** — verbatim, 2026-09-29. **Partly superseded 2026-10-10:** asked
+  whether a PR to upstream `Haris16-code/KryonOS` should be raised for the Korvo-1 once it passes a
+  clean-install hardware test, the user confirmed it should. That is what the "do not alter anything on
+  the main repo" clause forbade, so this bullet and §2's upstream row now record the intent rather than
+  the prohibition. Everything is still committed and pushed to this fork only, and the PR is held.
+  The other two clauses are unchanged.
 - **No Claude attribution anywhere.** No `Co-Authored-By` trailer, no "Generated with Claude Code"
   footer, no mention in any tracked file or doc. This overrides the session-level attribution reminder;
   the user's own instruction takes precedence and the reminder says so. Skip it silently rather than
@@ -449,12 +460,14 @@ non-TFT_eSPI backend seam.
 
 ## 11. The ESP32-S31-Korvo-1 port — done, verified on hardware
 
-*(The fork's reason for existing. §4's environment table and §5 predate it; §4 called the chip "not yet
-ported to the Arduino 4.x API", which is no longer true.)*
+*(The fork's reason for existing. §5 was written before it; §4's environment table has been updated.)*
 
 **State.** `esp32s31-korvo1` builds with **PlatformIO / arduino-esp32 alone** — no IDF build system and
 no BSP — and runs on the board: the 800x480 panel and the GT1151 touch both verified on COM3.
-`firmware.bin` is 2,121,616 bytes; flash 30.8% of 6,553,600, RAM 28.6% of 327,680.
+`firmware.bin` is 2,121,616 bytes, over a 6,553,600-byte app slot. The linker reports 2,020,176 bytes
+used — flash 30.8% — and RAM 28.6% of 327,680. The `.bin` is the larger figure because DROM's
+`.eh_frame` is not counted by the size tool but is in the image, which is the same discrepancy §5.2
+describes.
 
 **The environment** (`platformio.ini`, `[env:esp32s31-korvo1]`):
 
