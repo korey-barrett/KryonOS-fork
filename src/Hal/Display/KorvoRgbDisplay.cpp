@@ -33,7 +33,7 @@
 
 namespace {
 
-// BSP include/bsp/esp32_s31_korvo_1.h:95-115 -- the 16-bit RGB565 parallel bus.
+// From Espressif's board support package for this board -- the 16-bit RGB565 parallel bus.
 constexpr int kRgbVsync = 45;
 constexpr int kRgbHsync = 44;
 constexpr int kRgbDe = 43;
@@ -42,8 +42,7 @@ constexpr int kRgbDisp = 38;
 constexpr int kRgbData[16] = {8,  9,  10, 11, 12, 13, 14, 15,
                               16, 17, 18, 19, 33, 34, 35, 36};
 
-// BSP include/bsp/display.h:38-39 and the BSP_DISPLAY_PANEL_RGB_TIMING() macro
-// (esp32_s31_korvo_1.h:495-507). Note pclk_active_neg: this panel latches on the falling edge, and
+// The same package's panel timings. Note pclk_active_neg: this panel latches on the falling edge, and
 // getting it wrong gives a picture that is present but shifted and washed out rather than absent.
 constexpr int kPanelHRes = 800;
 constexpr int kPanelVRes = 480;

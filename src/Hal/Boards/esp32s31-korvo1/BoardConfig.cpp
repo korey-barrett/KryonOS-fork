@@ -8,7 +8,7 @@
 //
 // `[env:esp32s31-korvo1]` defines that macro, so under PlatformIO this is the *active* board
 // implementation for that one environment; the other environments compile it to nothing and are
-// untouched. The IDF build defines it too (see idf/main/CMakeLists.txt).
+// untouched. The IDF build defines it too.
 //
 // Like the Waveshare board, this one has exactly ONE possible backend, and it is not a TftEspiDisplay:
 // TFT_eSPI cannot drive an RGB parallel panel at all, and on this target it is a rasterizer-only shim
