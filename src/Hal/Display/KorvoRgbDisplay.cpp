@@ -6,6 +6,12 @@
 // present() has no frame to hand over; what it does have to do is write the CPU's cached drawing back
 // out to the PSRAM the DMA scans.
 
+// S31-only, like the header -- and for the same reason the guard comes first: the includes below name
+// esp_lcd's RGB panel API, which does not exist for the classic ESP32 or for the 3.x core the other
+// environments build on. Without this, every one of them fails on a header for a peripheral their
+// silicon does not have.
+#if defined(KRYONOS_KRYON_SPRITE)
+
 #include "KorvoRgbDisplay.h"
 
 #include <Arduino.h>
@@ -395,3 +401,5 @@ void KorvoRgbDisplay::setSwapBytes(bool swap) {
 
 void KorvoRgbDisplay::startWrite() {}
 void KorvoRgbDisplay::endWrite() {}
+
+#endif // KRYONOS_KRYON_SPRITE
