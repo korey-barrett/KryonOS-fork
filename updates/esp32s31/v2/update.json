@@ -1,0 +1,17 @@
+{
+  "release": {
+    "version": "2.0.2",
+    "api_version": 2,
+    "type": "patch",
+    "changelog": "- ESP32-S31-Korvo-1 support: 800x480 RGB panel and GT1151 touch, built and flashed with PlatformIO."
+  },
+  "boards": {
+    "esp32s31-korvo1": {
+      "supports_ota": false,
+      "guide": "The ESP32-S31-Korvo-1 publishes no firmware yet. Build it with pio run -e esp32s31-korvo1 and flash it over USB.",
+      "version": "2.0.2",
+      "type": "patch",
+      "changelog": "- ESP32-S31-Korvo-1 support: 800x480 RGB panel and GT1151 touch, built and flashed with PlatformIO."
+    }
+  }
+}
