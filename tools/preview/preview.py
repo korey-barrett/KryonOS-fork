@@ -144,6 +144,16 @@ notification card (yellow) · keyboard (purple).</p>
 """
 
 
+def _kb(name: str) -> Dict:
+    """The env's keyboard grid shape, or None for the shared 12x4 default.
+
+    A resolution alone does not imply the grid -- the Waveshare declares 6x6 (see KB_SHAPE in
+    layout_model.py, mirrored from KRYONOS_KB_* in UiLayout.h). Rendering it with the shared grid
+    would draw keys the board does not have, in the one place the keyboard is easiest to eyeball.
+    """
+    return lm.KB_SHAPE.get(name)
+
+
 def build_screens(args) -> List[Tuple[str, Dict]]:
     screens: List[Tuple[str, Dict]] = []
 
@@ -158,13 +168,13 @@ def build_screens(args) -> List[Tuple[str, Dict]]:
         if args.board not in boards:
             raise SystemExit(f"unknown board '{args.board}'. Known: {', '.join(sorted(boards))}")
         w, h, rot = boards[args.board]
-        screens.append((f"{args.board} (rotation {rot})", lm.compute(w, h)))
+        screens.append((f"{args.board} (rotation {rot})", lm.compute(w, h, _kb(args.board))))
         return screens
 
     # default / --all: every discovered board, then the test strip.
     for name in sorted(boards):
         w, h, rot = boards[name]
-        screens.append((f"{name} (rotation {rot})", lm.compute(w, h)))
+        screens.append((f"{name} (rotation {rot})", lm.compute(w, h, _kb(name))))
     if args.all:
         for (w, h, rot) in TEST_RESOLUTIONS:
             screens.append((f"test {w}x{h} (rotation {rot})", lm.compute(w, h)))

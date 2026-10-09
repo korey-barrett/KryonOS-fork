@@ -7,6 +7,11 @@
 // pgm_read_byte/pgm_read_dword indirection is dropped -- it would be a no-op, and indexing the tables
 // directly is what makes the pointer tables below readable.
 
+// Compiled only where a backend has no real TFT_eSPI to draw text with -- which today means the
+// ESP32-S31. src/ is built for every environment, and the vendored font tables below are 86 KB of
+// source, which the CYD cannot afford: §5.2 left it 135,904 bytes of headroom.
+#if defined(KRYONOS_KRYON_SPRITE)
+
 #include "KryonText.h"
 
 #include <string.h>
@@ -230,3 +235,5 @@ int16_t drawString(Surface& surface, const char* string, int32_t poX, int32_t po
 }
 
 } // namespace kryon_text
+
+#endif // KRYONOS_KRYON_SPRITE

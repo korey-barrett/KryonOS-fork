@@ -29,7 +29,7 @@
 //   KRYONOS_TOUCH_USE_ESP_LCD is defined by the IDF component that builds this file (see
 //   idf/components/kryonos_s31_touch). It is never defined by platformio.ini, so under PlatformIO
 //   this header declares nothing and the .cpp is an empty translation unit -- which is what keeps the
-//   seven existing environments compiling src/ from seeing esp_lcd_touch.h at all.
+//   six existing environments compiling src/ from seeing esp_lcd_touch.h at all.
 // ---------------------------------------------------------------------------------------------
 
 #if defined(KRYONOS_TOUCH_USE_ESP_LCD)

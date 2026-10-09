@@ -62,8 +62,8 @@ constexpr uint32_t kBacklightMaxDuty = (1u << kBacklightBits) - 1u;
 // panel's bounce-buffer refill, which is itself reading PSRAM.
 constexpr uint32_t kMinPresentIntervalMs = 50;
 
-// A presented framebuffer is adopted by the scanout at the next frame boundary, ~17 ms later at this
-// panel's 58.5 Hz. Half a second of no boundary means the frame-complete interrupt is not arriving
+// A presented framebuffer is adopted by the scanout at the next frame boundary, ~18 ms later at this
+// panel's 55.8 Hz. Half a second of no boundary means the frame-complete interrupt is not arriving
 // at all, and the handshake below would otherwise block every present forever -- a frozen screen
 // being a far worse failure than the tearing this backend exists to remove.
 constexpr uint32_t kSwapStallMs = 500;
@@ -492,7 +492,7 @@ bool EspLcdRgbDisplay::setUpPanel() {
     //
     // That is why the bounce buffer cannot be dropped. Without it there is no way to show framebuffer
     // 1 at all: the VSYNC restart re-enters at fbs[0] on every field, so a page flip to fb_[1] is
-    // overwritten 58 times a second. Measured on hardware -- with bounce_buffer_size_px = 0 the panel
+    // overwritten 56 times a second. Measured on hardware -- with bounce_buffer_size_px = 0 the panel
     // came up "double buffered", the flip callback fired, and the screen stayed BLACK, because
     // fb_[0] still held the black bring-up frame while the UI had been blitted into fb_[1].
     //
@@ -503,9 +503,10 @@ bool EspLcdRgbDisplay::setUpPanel() {
     // The catch, and it is the residual tear: bb_fb_index re-latches to cur_fb_index only when
     // `bounce_pos_px` wraps, while the VSYNC ISR resets `bounce_pos_px` to 0 whenever it exceeds two
     // bounce buffers' worth (lcd_rgb_panel_try_restart_transmission's desync branch) and pre-fills
-    // both buffers. A frame is 230400 px and a bounce buffer is 4800 px, so a field is only ~48 fills
-    // long against a wrap that needs ~46 -- the wrap, and therefore the flip, lands on the right side
-    // of the VSYNC only sometimes. That is why the tear came and went. See the note in present().
+    // both buffers. A frame is 230400 px and a bounce buffer is 4800 px, so a field is 48 fills and the
+    // wrap needs exactly 48 -- the driver derives expect_bb_eof_count from that same division -- so the
+    // wrap lands on the field boundary itself, and which side of the VSYNC it falls on is a race every
+    // frame. That is why the tear came and went. See the note in present().
     cfg.num_fbs = 2;
     cfg.bounce_buffer_size_px = 4800;
     cfg.dma_burst_size = 64;
@@ -517,9 +518,37 @@ bool EspLcdRgbDisplay::setUpPanel() {
     cfg.timings.hsync_back_porch = 10;
     cfg.timings.hsync_front_porch = 50;
     cfg.timings.vsync_pulse_width = 3;
-    cfg.timings.vsync_back_porch = 8;
     cfg.timings.vsync_front_porch = 8;
     cfg.timings.flags.pclk_active_neg = 0;
+
+    // The vertical back porch is the ONE timing value this board does not take from the vendor
+    // sequence (which is 3/8/8); everything else here matches it. It is the whole budget the driver
+    // has to re-anchor the scanout each field, and the vendor value does not leave enough of it.
+    //
+    // Why it is load-bearing: the prebuilt Arduino libs are built with CONFIG_LCD_RGB_RESTART_IN_VSYNC
+    // set (framework-arduinoespressif32-libs/esp32s3/sdkconfig), which compiles
+    // lcd_rgb_panel_try_restart_transmission down to `do_restart = true` on every VBlank
+    // (esp_lcd_panel_rgb.c:1153-1154) and drops the `bb_eof_count < expect_eof_count` desync guard
+    // further down. So the GDMA channel is torn down and restarted once per field, every field, and
+    // Espressif's own note above that code says what a late interrupt costs:
+    //
+    //   "if this interrupt is late enough, the display will shift as the LCD controller already read
+    //    out the first data bytes, and resetting DMA will re-send those."
+    //
+    // The restart also mounts its buffer with a fixed restart_skip_bytes of (LCD_LL_FIFO_DEPTH + 1) * 2
+    // -- a 17-pixel FIFO-preserve skip that is only correct if the restart lands where the driver
+    // assumes it does. Land late and that skip is wrong, which is what a thin band of bad pixels
+    // sweeping the screen is.
+    //
+    // The window is vsync_pulse_width + vsync_back_porch. At the vendor 3+8 that is 11 of 499 lines,
+    // and a line is 548 pclk at 16 MHz, so the ISR has ~377us. The bounce-buffer refill that keeps the
+    // panel fed runs from the GDMA EOF interrupt and memcpy's 9600 bytes out of PSRAM every ~300us
+    // (esp_lcd_panel_rgb.c:913, :920-922) -- the same PSRAM that WiFi, mbedTLS and every LittleFS
+    // write are also using, and a flash write stalls it outright. Missing the window is not rare.
+    //
+    // 32 makes the window 35 lines, ~1.2ms, for a refresh of 55.8Hz instead of 58.5. This is a DE-mode
+    // RGB panel: it takes the longer blanking, and no other timing value changes.
+    cfg.timings.vsync_back_porch = 32;
 
     cfg.hsync_gpio_num = kHsyncPin;
     cfg.vsync_gpio_num = kVsyncPin;
@@ -918,10 +947,34 @@ void EspLcdRgbDisplay::fillRoundRect(int32_t x, int32_t y, int32_t w, int32_t h,
     fillRect(x, y + radius, radius, h - 2 * radius, color);
     fillRect(x + w - radius, y + radius, radius, h - 2 * radius, color);
 
-    circleHelper(x + radius, y + radius, radius, 0x1, 0, c, true);
-    circleHelper(x + w - radius - 1, y + radius, radius, 0x2, 0, c, true);
-    circleHelper(x + w - radius - 1, y + h - radius - 1, radius, 0x4, 0, c, true);
-    circleHelper(x + radius, y + h - radius - 1, radius, 0x8, 0, c, true);
+    // Fill the four r-by-r corner squares the bands above leave uncovered, one row per chord,
+    // with the span clipped to the square. (sx, sy) points from the circle's centre towards the
+    // corner being filled; the centre sits on the square's inner corner, which is where
+    // drawRoundRect() puts it too.
+    //
+    // circleHelper() is the wrong tool for this and used to be used here -- the same bug
+    // RamFramebufferDisplay fixed in cc0a62a, still present on this backend. Its filled branch
+    // anchors each chord on the centre column and runs symmetric about it, which is correct for
+    // a whole circle (fillCircle still uses it) but not for a quadrant: the outer half of the
+    // corner square went unpainted and the inner half was spent on the band beside it. Every
+    // fillRoundRect came out with its right-hand corners bitten away -- which on a keypad whose
+    // keys are filled round rects, with drawRoundRect drawing the outline correctly on top,
+    // reads as a hollow link at the top and bottom right of each key. The exact chord is one
+    // integer square-root walk per row and radius is single digits.
+    auto corner = [&](int32_t sx, int32_t sy) {
+        const int32_t cx = (sx < 0) ? x + radius : x + w - radius - 1;
+        const int32_t cy = (sy < 0) ? y + radius : y + h - radius - 1;
+        for (int32_t d = 1; d <= radius; d++) {
+            int32_t e = 0;
+            while ((e + 1) * (e + 1) + d * d <= radius * radius) e++;
+            if (e == 0) continue;
+            hLine((sx < 0) ? cx - e : cx, cy + sy * d, e + 1, c);
+        }
+    };
+    corner(-1, -1); // top-left
+    corner(1, -1);  // top-right
+    corner(1, 1);   // bottom-right
+    corner(-1, 1);  // bottom-left
 }
 
 void EspLcdRgbDisplay::drawTriangle(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t x3,

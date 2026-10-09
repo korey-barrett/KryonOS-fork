@@ -37,7 +37,7 @@ upstream repository. That has not been tested here.
 
 ## Status
 
-The fork's storage layer now releases the SD volume for the duration of a flash update
-(`FileSystem::suspendSD()` / `resumeSD()`, called around `startFlashUpdate()` in
-`src/Settings/SettingsUI.cpp`). It is not yet confirmed on hardware, so removing the card stays the
-reliable workaround until it is.
+**Remove the SD card from the board before starting an update.** That is the solution, and it is what
+this page exists to say. The fork's storage layer also releases the SD volume for the duration of a
+flash update (`FileSystem::suspendSD()` / `resumeSD()`, called around `startFlashUpdate()` in
+`src/Settings/SettingsUI.cpp`), but taking the card out first costs nothing and removes the variable.

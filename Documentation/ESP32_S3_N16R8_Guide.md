@@ -164,7 +164,7 @@ and the global `[env]` section at the top of `platformio.ini`, so they are not r
 > `Documentation/Display_Touch_Architecture.md`.
 >
 > That holds for every board whose panel **is** its canvas, which is all of them except the Waveshare
-> 2.1B — there the panel is a 480×480 circle, the canvas is 240×320, and the backend scales it into a
+> 2.1B — there the panel is a 480×480 circle, the canvas is 201×268, and the backend scales it into a
 > 288×384 rect centred in the panel so the bezel cannot cut the footer. `width()`/`height()` still
 > report the canvas, so `Display::begin()`'s check stays silent; the panel's own size is the board
 > constant `BOARD_PANEL_W`/`BOARD_PANEL_H`.
