@@ -176,6 +176,30 @@ Two habits that avoid the problem entirely:
 
 ---
 
+## 6. Side note: a CYD that will not enter boot mode
+
+*(Not part of the flashing steps above. Only for the case where a CYD will not enter the ROM
+bootloader on its own.)*
+
+Some ESP32-CYD-28 boards do not come up in boot mode under esptool's own DTR/RTS toggling — the
+serial bridge on them does not carry those lines to the strap. The workaround is an **external host
+board**, an ESP32-S3 running `esp_usb_board`, wired to the CYD's UART pins, which holds BOOT low for
+you while the flash runs.
+
+Two things change when you flash that way:
+
+- **Boot mode has to be enabled by hand, before the flash starts.** The host board holds the strap;
+  the CYD has to be listening for it already.
+- **Pass `--before no_reset`** — `esptool`'s flag, or the equivalent in your flasher. The default
+  behaviour toggles DTR/RTS first, and on this board that a reset drops the CYD straight back out of
+  the boot mode the host is holding, so the flash then fails with no indication of why. Every other
+  board in this project auto-resets and takes no such flag.
+
+It is a quirk of these boards rather than of KryonOS, and it is the reason the boot-mode rule is
+scoped to the CYD alone.
+
+---
+
 *See also: [Hardware Architecture](Hardware_Architecture.md) §1 for the board table, and
 [Display & Touch Architecture](Display_Touch_Architecture.md) for how a board is selected at build
 time.*

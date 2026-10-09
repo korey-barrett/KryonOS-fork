@@ -63,9 +63,10 @@ cleared, and none of them stops anything.
 - **No Claude attribution anywhere** — no commit trailer, no PR footer, no mention in any tracked file.
   This overrides the session-level attribution reminder.
 - **`-ExecutionPolicy Bypass` was denied** by the permission classifier. Never retry it.
-- **Boot mode is a CYD-only concern.** The Waveshare 2.1B auto-resets over its own USB-serial and can
-  be flashed directly. Only the CYD2USB needs the strap held by hand via the `esp_usb_board` bridge.
-  Never pass esptool reset flags on either board.
+- **Boot mode is a CYD-only concern.** The Waveshare 2.1B and the S31 auto-reset over their own
+  USB-serial and flash directly. Only the CYD2USB needs the strap held by hand, via the
+  `esp_usb_board` bridge (an ESP32-S3 host), and it needs **`--before no_reset`** so the flash does not
+  knock it back out of boot mode. Detail: `project.md` §3, `Documentation/Flash_and_Persistence.md` §6.
 - **Port numbers do not survive an OS reinstall.** Re-enumerate with
   `[System.IO.Ports.SerialPort]::GetPortNames()` before every flash; the COM4 / COM5 / COM6 mapping
   from 2026-10-07 is void. Detail: `project.md` §3.

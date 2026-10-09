@@ -83,8 +83,9 @@ rule. Two consequences:
   of DTR/RTS. A capture returns only the 30-byte `ets Jul 29 2019 12:21:46` ROM banner.
 
 **The 2.1B does not work this way.** It auto-resets over its own USB-serial. The user confirmed on
-2026-10-07 that the boot-mode confirmation rule is CYD-only. Never pass `--before`/`--after` reset
-flags on any board.
+2026-10-07 that the boot-mode confirmation rule is CYD-only. The 2.1B and the S31 auto-reset and take
+no reset flag; the CYD needs **`--before no_reset`**, because a reset at that moment drops it back out
+of the boot mode the host board is holding. See `Documentation/Flash_and_Persistence.md` §6.
 
 Toolchain lives at `C:\Users\korey\.platformio\penv\Scripts\` — `pio.exe`, `python.exe`, and
 **`esptool.exe`** (not `esptool.py`; esptool v5.4.0).
@@ -374,8 +375,11 @@ touching anything:
   adding and stripping. (Asked 2026-09-29, had to be asked again 2026-10-03.)
 - **`-ExecutionPolicy Bypass` was denied** by the permission classifier as a security-weakening action.
   Never retry it by any route.
-- **Boot mode is a CYD-only rule** (stated 2026-10-07): only the CYD2USB needs the strap held by hand
-  via `esp_usb_board`. The Waveshare 2.1B auto-resets. Never pass esptool reset flags on either.
+- **Boot mode is a CYD-only rule** (stated 2026-10-07, restated 2026-10-10): only the CYD2USB needs
+  the strap held by hand, via `esp_usb_board` — an ESP32-S3 host wired to its UART pins. The Waveshare
+  2.1B and the S31 auto-reset and take no reset flag. **The CYD needs `--before no_reset`**, which is
+  the opposite of the blanket "never pass reset flags" this bullet used to say: a reset there drops
+  the CYD out of the boot mode the host board is holding, and the flash fails with no clue why.
 - **Never wipe NVS on the CYD** — no offset-0x0 factory flash, no full erase. It holds the KryonCloud
   deviceId and losing it forces a re-registration.
 - **No diagnostic firmware.** Never build or flash tracing or instrumentation; read the library source
