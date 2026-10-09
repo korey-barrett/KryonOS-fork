@@ -20,7 +20,9 @@
 #include "BoardConfig.h"
 
 #include "Hal/Display/KryonDisplay.h"
-#include "KorvoRgbDisplay.h" // idf/components/kryonos_s31_display -- the BSP-backed RGB backend
+#include "KorvoRgbDisplay.h" // src/Hal/Display -- the RGB backend. Configures the panel itself through
+                             // esp_lcd rather than through Espressif's BSP, so the board can also
+                             // build under PlatformIO, where no BSP component exists.
 
 #include "Settings/TouchDriver.h"
 #include "FileSystem/FileSystem.h"
@@ -28,16 +30,26 @@
 // The card is mounted with Arduino's SDMMC filesystem rather than the BSP's VFS mount -- see initSD().
 #include <SD_MMC.h>
 
-#include "bsp/display.h"
-#include "bsp/esp32_s31_korvo_1.h"
+// The board's pin facts, vendored from Espressif's BSP (esp32_s31_korvo_1.h) so this file carries no
+// IDF-only dependency -- the same reason KorvoRgbDisplay vendors the panel's timings. See initSD() for
+// why the enable line is load-bearing.
+namespace {
+constexpr int kSdClk = 24;     // BSP_SD_CLK
+constexpr int kSdCmd = 25;     // BSP_SD_CMD
+constexpr int kSdD0 = 20;      // BSP_SD_D0
+constexpr int kSdD1 = 21;      // BSP_SD_D1
+constexpr int kSdD2 = 22;      // BSP_SD_D2
+constexpr int kSdD3 = 23;      // BSP_SD_D3
+constexpr int kSdEnable = 39;  // BSP_SD_EN -- the slot's power/enable line
+} // namespace
 
 #if KRYONOS_DISPLAY_BACKEND != KRYONOS_BACKEND_RGB
 #error "esp32s31-korvo1 needs -D KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RGB"
 #endif
 
-// Global display instance. The backend owns the RGB panel through the BSP: it asks
-// bsp_display_new_with_handles() for the panel handle, allocates the canvas in PSRAM and blits through
-// esp_lcd_panel_draw_bitmap.
+// Global display instance. The backend owns the RGB panel: it configures it through esp_lcd directly
+// (the panel values are vendored into KorvoRgbDisplay from the BSP), then attaches its canvas to the
+// panel's own frame buffer so every primitive lands in the memory the scanout reads.
 //
 // The size is passed as the canvas size and NOT as a separate panel size, because on this board they
 // are the same thing -- the canvas is 1:1 with the panel and panelToCanvas() is the identity. The
@@ -50,10 +62,10 @@ bool hasTouch(void) { return true; }
 bool hasKeyboard(void) { return false; }
 bool hasBattery(void) { return false; }
 
-// Touch Interface. TouchDriver resolves to EspLcdTouchDriver here because the IDF component that builds
-// it defines KRYONOS_TOUCH_USE_ESP_LCD and the factory selects that kind -- the controller is brought up
-// by bsp_touch_new(), so there is no register map and no reset pulse in this file. The BSP reports
-// BSP_LCD_TOUCH_INT as GPIO_NUM_NC, so the driver polls: there is no interrupt line to wait on.
+// Touch Interface. The environment names the driver (-D KRYONOS_TOUCH_DRIVER="gt1151"), so the
+// register map lives in Gt1151Driver rather than behind a BSP call. This board's touch interrupt is
+// not connected (the BSP reports it as GPIO_NUM_NC), so the driver polls: there is no line to wait on
+// and nothing to miss.
 bool isTouched(void) {
     uint16_t x, y;
     return TouchDriver::getTouch(&x, &y);
@@ -107,37 +119,36 @@ void initTouch(void) {
     TouchDriver::init(&tft);
 }
 
-// SD Card -- 4-bit SDMMC on the BSP's own pins, mounted as an Arduino fs::FS.
+// SD Card -- 4-bit SDMMC on the board's own pins, mounted as an Arduino fs::FS.
 //
-// WHY NOT bsp_sdcard_mount()
-//   The BSP can mount this card, and it is the obvious call -- but what it produces is an
-//   esp_vfs_fat_sdmmc_mount registration, i.e. a path under the VFS. Board.h's contract is fs::FS*, and
-//   the file browser, app loader and installer are all written against that type. Adopting the BSP's
-//   mount would mean rewriting the storage layer against raw fopen paths, which is exactly the kind of
-//   change this port exists to avoid. So the BSP is used for the two things only it knows -- which pins
-//   the slot is on, and that it needs enabling -- and the mount itself is Arduino's, which yields a
-//   real fs::FS the rest of the OS already understands.
+// WHY THE MOUNT IS ARDUINO'S
+//   The BSP can mount this card, and what it hands back is an esp_vfs_fat_sdmmc_mount registration --
+//   a path under the VFS. Board.h's contract is fs::FS*, and the file browser, app loader and installer
+//   are all written against that type. Adopting the VFS mount would mean rewriting the storage layer
+//   against raw fopen paths, which is exactly the kind of change this port exists to avoid. So the pins
+//   are vendored above and the mount itself is Arduino's, which yields a real fs::FS the rest of the OS
+//   already understands.
 //
 // THE ENABLE PIN IS THE PART THAT WOULD SILENTLY FAIL
-//   The slot has a power/enable line on GPIO39 (BSP_SD_EN) which nothing but the BSP drives:
-//   bsp_feature_enable(BSP_FEATURE_SD, true) configures it as an output and pulls it low. Without that
-//   call SD_MMC.begin() finds no card and reports a mount failure, which reads like a card problem
+//   The slot has a power/enable line on GPIO39 that has to be driven before the card answers. Left
+//   alone, SD_MMC.begin() finds no card and reports a mount failure -- which reads like a card problem
 //   rather than a missing enable.
 //
-// NO CARD-DETECT PIN: BSP_SD_DET is GPIO_NUM_NC, so there is no way to tell "empty slot" from "bad
-// card". Every failure returns nullptr rather than aborting, the same shape the Waveshare board uses --
-// this board must stay reachable with no card in the slot.
+// NO CARD-DETECT PIN, so there is no way to tell "empty slot" from "bad card". Every failure returns
+// nullptr rather than aborting, the same shape the Waveshare board uses -- this board must stay
+// reachable with no card in the slot.
 fs::FS* initSD(void) {
     if (SD_MMC.cardType() != CARD_NONE) return &SD_MMC; // already mounted
 
-    // Idempotent on the BSP's side (it just reconfigures the GPIO), so calling it on every attempt is
-    // deliberate: a mount can fail for reasons other than the enable line, and a retry should not
-    // depend on remembering whether an earlier call already ran.
-    bsp_feature_enable(BSP_FEATURE_SD, true);
+    // Driven on every attempt rather than once: re-asserting it is free, and a mount can fail for
+    // reasons other than the enable line, so a retry should not depend on remembering whether an
+    // earlier call already ran.
+    pinMode(kSdEnable, OUTPUT);
+    digitalWrite(kSdEnable, LOW);
 
     // 4-bit: the slot wires D0-D3, unlike the Waveshare board's 1-bit slot, which is why all six pins
     // are named here and mode1bit is false below.
-    SD_MMC.setPins(BSP_SD_CLK, BSP_SD_CMD, BSP_SD_D0, BSP_SD_D1, BSP_SD_D2, BSP_SD_D3);
+    SD_MMC.setPins(kSdClk, kSdCmd, kSdD0, kSdD1, kSdD2, kSdD3);
 
     // format_if_mount_failed stays false on purpose: a failed mount must never reformat a card that may
     // hold the user's data -- and this board cannot even tell "no card" from "unreadable card", which is

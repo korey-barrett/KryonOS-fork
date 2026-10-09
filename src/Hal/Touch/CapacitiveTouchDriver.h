@@ -113,4 +113,37 @@ protected:
     uint8_t touchesLogged_ = 0;
 };
 
+// GT1151 (Goodix, 7-bit address 0x14) -- the touch controller fitted to the ESP32-S31-Korvo-1.
+//
+// 16-bit register addresses like the GT911 above, but it is NOT the same protocol. Three differences
+// matter, and each one silently yields "no touch" if carried over from the GT911:
+//
+//   * Status 0x814E carries the touch count in its LOW NIBBLE. There is no ready bit -- the GT911's
+//     0x80 test finds nothing here, because GT1151 reports readiness through the count alone.
+//   * Every frame ends with a 2-byte checksum, and ALL bytes read -- status included -- must sum to
+//     zero. The GT911 has no such field.
+//   * A point record is 8 bytes, not the GT911's 7: a nibble of id plus four reserved bits, then X,
+//     Y, strength, then a spare. The stride is what differs; the X/Y offsets happen to line up.
+//
+// The protocol below follows espressif/esp_lcd_touch_gt1151 (esp_lcd_touch_gt1151.c: READ_XY_REG,
+// DATA_BUFF_LEN, the checksum loop) rather than being inferred from the GT911's map. That component
+// is what brought this controller up before, through the BSP -- this is the same sequence without
+// the IDF dependency.
+class Gt1151Driver : public I2cTouchDriver {
+public:
+    Gt1151Driver() : I2cTouchDriver(0x14) { setName("gt1151"); }
+
+protected:
+    bool probe() override;
+    bool readPoint(uint16_t* x, uint16_t* y) override;
+
+private:
+    bool readReg16(uint16_t reg, uint8_t* out, size_t length);
+    bool writeReg8(uint16_t reg, uint8_t value);
+
+    // One line, once. A checksum that fails on every frame is an address or wiring problem rather than
+    // a panel one, and saying so beats a controller that looks present but never reports a touch.
+    bool checksumWarned_ = false;
+};
+
 #endif // KRYONOS_CAPACITIVE_TOUCH_DRIVER_H

@@ -1,8 +1,10 @@
-// The ESP32-S31-Korvo-1 display backend. See KorvoRgbDisplay.h for why it is this short: Espressif's
-// BSP owns the panel, the bus, the timings and the frame buffers, and this file owns only the one
-// thing a BSP cannot give -- a rasterizer call surface. Drawing goes straight into the panel's own
-// frame buffer, so present() has no frame to hand over; what it does have to do is write the CPU's
-// cached drawing back out to the PSRAM the DMA scans.
+// The ESP32-S31-Korvo-1 display backend. See KorvoRgbDisplay.h for why the panel is configured here
+// rather than by Espressif's BSP, why it is not in bounce buffer mode, and why present() is not an
+// empty method.
+//
+// This file owns the panel's bring-up. Drawing goes straight into the panel's own frame buffer, so
+// present() has no frame to hand over; what it does have to do is write the CPU's cached drawing back
+// out to the PSRAM the DMA scans.
 
 #include "KorvoRgbDisplay.h"
 
@@ -10,12 +12,80 @@
 
 #include <stdio.h>
 
-#include <esp_err.h>
+#include <driver/gpio.h>
 #include <esp_cache.h>
-
-#include "bsp/display.h"
+#include <esp_err.h>
+#include <esp_lcd_panel_ops.h>
+#include <esp_lcd_panel_rgb.h>
 
 #include "UI/UiLayout.h" // uiScale(), so text is sized from the same number the layout is
+
+// =================================================================================================
+// The panel, vendored from Espressif's BSP
+//
+// Every value in this block is copied from espressif__esp32_s31_korvo_1 -- the managed component an
+// earlier revision of this backend called into through bsp_display_new_with_handles(). It could not
+// stay a dependency: the BSP is an ESP-IDF component, and this board builds under the upstream
+// PlatformIO / arduino-esp32 stack, where no such component exists.
+//
+// So the numbers are the BSP's; keeping them correct is now ours. Sources are named at each one.
+// =================================================================================================
+
+namespace {
+
+// BSP include/bsp/esp32_s31_korvo_1.h:95-115 -- the 16-bit RGB565 parallel bus.
+constexpr int kRgbVsync = 45;
+constexpr int kRgbHsync = 44;
+constexpr int kRgbDe = 43;
+constexpr int kRgbPclk = 40;
+constexpr int kRgbDisp = 38;
+constexpr int kRgbData[16] = {8,  9,  10, 11, 12, 13, 14, 15,
+                              16, 17, 18, 19, 33, 34, 35, 36};
+
+// BSP include/bsp/display.h:38-39 and the BSP_DISPLAY_PANEL_RGB_TIMING() macro
+// (esp32_s31_korvo_1.h:495-507). Note pclk_active_neg: this panel latches on the falling edge, and
+// getting it wrong gives a picture that is present but shifted and washed out rather than absent.
+constexpr int kPanelHRes = 800;
+constexpr int kPanelVRes = 480;
+
+// BSP src/bsp_display.c:79-118. num_fbs is the BSP's CONFIG_BSP_LCD_RGB_BUFFER_NUMS default of 1, and
+// that is load-bearing here rather than incidental: the canvas IS the single frame buffer, so a second
+// one would be memory nothing ever scans. bounce_buffer_size_px is left at 0 for the reason in the
+// header -- the BSP reached the same value through its CONFIG_BSP_LCD_RGB_REFRESH_AUTO default.
+void buildPanelConfig(esp_lcd_rgb_panel_config_t* cfg) {
+    *cfg = {};
+
+    cfg->clk_src = LCD_CLK_SRC_PLL160M;
+    cfg->dma_burst_size = 64;
+    cfg->data_width = 16;
+    cfg->in_color_format = LCD_COLOR_FMT_RGB565;
+
+    cfg->de_gpio_num = static_cast<gpio_num_t>(kRgbDe);
+    cfg->pclk_gpio_num = static_cast<gpio_num_t>(kRgbPclk);
+    cfg->vsync_gpio_num = static_cast<gpio_num_t>(kRgbVsync);
+    cfg->hsync_gpio_num = static_cast<gpio_num_t>(kRgbHsync);
+    cfg->disp_gpio_num = static_cast<gpio_num_t>(kRgbDisp);
+    for (int i = 0; i < 16; i++) {
+        cfg->data_gpio_nums[i] = static_cast<gpio_num_t>(kRgbData[i]);
+    }
+
+    cfg->timings.pclk_hz = 18 * 1000 * 1000;
+    cfg->timings.h_res = kPanelHRes;
+    cfg->timings.v_res = kPanelVRes;
+    cfg->timings.hsync_pulse_width = 40;
+    cfg->timings.hsync_back_porch = 40;
+    cfg->timings.hsync_front_porch = 48;
+    cfg->timings.vsync_pulse_width = 23;
+    cfg->timings.vsync_back_porch = 32;
+    cfg->timings.vsync_front_porch = 13;
+    cfg->timings.flags.pclk_active_neg = true;
+
+    cfg->flags.fb_in_psram = 1;
+    cfg->num_fbs = 1;
+    // cfg->bounce_buffer_size_px stays 0 -- see "WHY THE PANEL IS NOT IN BOUNCE BUFFER MODE".
+}
+
+} // namespace
 
 // =================================================================================================
 // Lifecycle
@@ -26,9 +96,12 @@ KorvoRgbDisplay::KorvoRgbDisplay(int16_t width, int16_t height)
 
 KorvoRgbDisplay::~KorvoRgbDisplay() {
     if (canvas_.created()) canvas_.deleteSprite();
-    // The panel itself belongs to the BSP (bsp_display_delete), which the BSP's own teardown runs.
-    // Deleting it here would free a handle another owner is still holding.
-    panel_ = nullptr;
+    // Unlike the BSP-backed revision, this backend created the panel, so it deletes it. Nothing else
+    // holds the handle.
+    if (panel_) {
+        esp_lcd_panel_del(panel_);
+        panel_ = nullptr;
+    }
 }
 
 bool KorvoRgbDisplay::ready() const { return panel_ != nullptr && canvasReady_; }
@@ -37,28 +110,39 @@ void KorvoRgbDisplay::init(uint8_t tc) {
     (void)tc;
     if (panel_) return; // idempotent: Display::begin() may run more than once
 
-    Serial.printf("[Display:korvo] bringing up the %dx%d RGB panel through the Korvo-1 BSP\n",
+    Serial.printf("[Display:korvo] bringing up the %dx%d RGB panel directly through esp_lcd\n",
                   static_cast<int>(nativeW_), static_cast<int>(nativeH_));
 
-    const bsp_display_config_t bspCfg = {};
-    bsp_lcd_handles_t handles = {};
-    esp_err_t err = bsp_display_new_with_handles(&bspCfg, &handles);
-    if (err != ESP_OK || !handles.panel) {
+    esp_lcd_rgb_panel_config_t panelCfg;
+    buildPanelConfig(&panelCfg);
+
+    esp_err_t err = esp_lcd_new_rgb_panel(&panelCfg, &panel_);
+    if (err != ESP_OK || !panel_) {
         lastError_ = esp_err_to_name(err);
         Serial.printf("[Display:korvo] FAILED at panel bring-up: %s -- drawing disabled.\n",
                       lastError_);
+        panel_ = nullptr;
         return;
     }
-    panel_ = handles.panel;
+
+    // The BSP's init sequence, verbatim (src/bsp_display.c:120-125). invert_color(false) is not
+    // cosmetic: the RGB565 path here is native end to end, and inverting would render every colour as
+    // its complement.
+    esp_lcd_panel_reset(panel_);
+    esp_lcd_panel_init(panel_);
+    esp_lcd_panel_invert_color(panel_, false);
+    esp_lcd_panel_swap_xy(panel_, false);
+    esp_lcd_panel_mirror(panel_, false, false);
 
     // The panel's own frame buffer, and the canvas IS that buffer -- see "DRAWING GOES STRAIGHT TO
-    // THE PANEL" in the header. There is no second copy: the driver allocated exactly one
-    // (BSP_LCD_RGB_BUFFER_NUMS=1) and it is the memory the scanout reads.
+    // THE PANEL" in the header. There is no second copy: num_fbs is 1 and this is the memory the
+    // scanout reads.
     err = esp_lcd_rgb_panel_get_frame_buffer(panel_, 1, &fb_);
     if (err != ESP_OK || !fb_) {
         lastError_ = "the panel did not expose a frame buffer";
         Serial.printf("[Display:korvo] FAILED at frame buffer: %s -- drawing disabled.\n",
                       lastError_);
+        esp_lcd_panel_del(panel_);
         panel_ = nullptr;
         return;
     }
@@ -68,6 +152,7 @@ void KorvoRgbDisplay::init(uint8_t tc) {
     if (!canvas_.attachBuffer(static_cast<uint16_t*>(fb_), nativeW_, nativeH_)) {
         lastError_ = "the canvas could not be attached to the panel frame buffer";
         Serial.printf("[Display:korvo] FAILED at canvas: %s -- drawing disabled.\n", lastError_);
+        esp_lcd_panel_del(panel_);
         panel_ = nullptr;
         return;
     }
@@ -94,16 +179,13 @@ void KorvoRgbDisplay::init(uint8_t tc) {
         Serial.printf("[Display:korvo] esp_lcd_panel_disp_on_off failed: %s\n", esp_err_to_name(err));
     }
 
-    // Returns ESP_ERR_NOT_SUPPORTED on this board BY DESIGN: BSP_LCD_BACKLIGHT is GPIO_NUM_NC, so
-    // there is no pin to drive and the backlight is hardwired on. Calling it anyway keeps the
-    // bring-up sequence identical to every other backend, and the result is logged rather than
-    // checked -- a "failure" here would be a false alarm.
-    const esp_err_t blErr = bsp_display_backlight_on();
+    // The BSP's bsp_display_backlight_on() returned ESP_ERR_NOT_SUPPORTED on this board BY DESIGN:
+    // BSP_LCD_BACKLIGHT is GPIO_NUM_NC, so there is no pin to drive and the backlight is hardwired on.
+    // Vendoring the call would mean vendoring a guaranteed failure, so the fact is logged instead --
+    // the bring-up sequence below still reports it in the same terms as every other backend.
     Serial.printf("[Display:korvo] ready: canvas is the panel frame buffer, %dx%d, UI scale %u, "
-                  "backlight %s (%s)\n",
-                  static_cast<int>(w_), static_cast<int>(h_), static_cast<unsigned>(textScale),
-                  blErr == ESP_OK ? "on" : "always-on (no control)",
-                  esp_err_to_name(blErr));
+                  "backlight always-on (no control pin)\n",
+                  static_cast<int>(w_), static_cast<int>(h_), static_cast<unsigned>(textScale));
 }
 
 void KorvoRgbDisplay::setRotation(uint8_t rotation) {
@@ -130,12 +212,12 @@ int16_t KorvoRgbDisplay::height() { return h_; }
 
 void KorvoRgbDisplay::setBacklight(uint8_t brightness) {
     // No-op with a reason, once. The board has no backlight pin, so brightness cannot be changed at
-    // all -- the BSP's own brightness and on/off calls all return ESP_ERR_NOT_SUPPORTED. Recording
-    // the request keeps the behaviour legible from a log instead of looking like a silent failure.
+    // all. Recording the request keeps the behaviour legible from a log instead of looking like a
+    // silent failure.
     if (!backlightWarned_) {
         backlightWarned_ = true;
         Serial.printf("[Display:korvo] setBacklight(%u) is a no-op: this board's backlight is "
-                      "hardwired on (BSP_LCD_BACKLIGHT is GPIO_NUM_NC).\n",
+                      "hardwired on.\n",
                       static_cast<unsigned>(brightness));
     }
 }

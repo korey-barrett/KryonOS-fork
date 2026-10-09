@@ -16,7 +16,7 @@
 //   (when TOUCH_CS is defined), else a null driver that reports no touch. That keeps every board
 //   that existed before this seam behaving identically without setting the flag at all.
 //
-//   Known names: auto, xpt2046_bitbang, xpt2046_tft, ft6236, gt911, cst816, null.
+//   Known names: auto, xpt2046_bitbang, xpt2046_tft, ft6236, gt911, gt1151, cst816, null.
 // ---------------------------------------------------------------------------------------------
 
 #include <stdint.h>

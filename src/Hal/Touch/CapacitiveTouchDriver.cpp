@@ -282,3 +282,76 @@ bool Cst816Driver::readPoint(uint16_t* x, uint16_t* y) {
     *y = ry;
     return true;
 }
+
+// --- GT1151 --------------------------------------------------------------------------------------
+//
+// The protocol is esp_lcd_touch_gt1151's, ported to this file's I2C helpers. See Gt1151Driver in the
+// header for the three ways it differs from the GT911 sitting above it -- the missing ready bit, the
+// frame checksum, and the 8-byte point stride.
+
+bool Gt1151Driver::writeReg8(uint16_t reg, uint8_t value) {
+    uint8_t frame[3] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF), value};
+    return I2CEngine::writeRaw(address_, frame, sizeof(frame));
+}
+
+bool Gt1151Driver::readReg16(uint16_t reg, uint8_t* out, size_t length) {
+    uint8_t addr[2] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF)};
+    if (!I2CEngine::writeRaw(address_, addr, sizeof(addr))) return false;
+    std::vector<uint8_t> data;
+    if (!I2CEngine::readRaw(address_, length, data) || data.size() < length) return false;
+    for (size_t i = 0; i < length; i++) out[i] = data[i];
+    return true;
+}
+
+bool Gt1151Driver::probe() {
+    if (!I2CEngine::ping(address_)) return false;
+    // 0x8140 is the product id, four bytes on both Goodix parts -- reading it is what distinguishes a
+    // controller that answers from one that merely holds the bus.
+    uint8_t product[4] = {0, 0, 0, 0};
+    return readReg16(0x8140, product, sizeof(product));
+}
+
+bool Gt1151Driver::readPoint(uint16_t* x, uint16_t* y) {
+    // 0x814E is the report register: one status byte in, the whole frame readable from the same
+    // address. The vendor reads it twice -- once for the count, once for the frame.
+    uint8_t status = 0;
+    if (!readReg16(0x814E, &status, 1)) return false;
+
+    const int points = status & 0x0F;
+
+    // MAX_TOUCH_NUM in the vendor driver is 10; anything larger is a garbled read rather than a
+    // ten-fingered report. The register is also a latch, so it is cleared on every scan -- including
+    // the paths that report nothing, or the controller stops publishing new frames.
+    if (points == 0 || points > 10) {
+        writeReg8(0x814E, 0);
+        return false;
+    }
+
+    // status + one 8-byte record + the 2-byte checksum, matching DATA_BUFF_LEN(1).
+    uint8_t buf[11] = {0};
+    if (!readReg16(0x814E, buf, sizeof(buf))) return false;
+
+    // Clear only after the frame is captured, as the vendor does: writing 0 first would discard the
+    // report this scan is about to read.
+    writeReg8(0x814E, 0);
+
+    // Every byte of the frame, status included, sums to zero.
+    uint8_t sum = 0;
+    for (size_t i = 0; i < sizeof(buf); i++) sum = (uint8_t)(sum + buf[i]);
+    if (sum != 0) {
+        if (!checksumWarned_) {
+            checksumWarned_ = true;
+            Serial.printf("[TOUCH] gt1151 frame checksum failed (sum 0x%02X); frame ignored. Every "
+                          "frame failing is an address or wiring fault, not a panel one.\n",
+                          sum);
+        }
+        return false;
+    }
+
+    // The record begins at offset 1: byte 0 is the id nibble and four reserved bits, then X and Y
+    // little-endian, then strength, then a spare. X and Y are native panel pixels -- the controller is
+    // configured with the panel's own size -- so neither is masked, unlike the GT911's 12-bit fields.
+    *x = (uint16_t)(buf[1] | ((uint16_t)buf[2] << 8));
+    *y = (uint16_t)(buf[3] | ((uint16_t)buf[4] << 8));
+    return true;
+}
