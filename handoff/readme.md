@@ -52,7 +52,7 @@ and none of them stops anything.
 - **Never write the word "honestly."** State a caveat directly instead.
 - **Commit to this fork only.** `origin` is `korey-barrett/KryonOS-fork`. Never alter, add, or PR
   against upstream `Haris16-code/KryonOS`.
-- **`D:\KryonOS` (v2.0.0) and `D:\esp32s31_korvo1` are read-only.** Read them; never edit them.
+- **`X:\KryonOS` (v2.0.0) and `X:\esp32s31_korvo1` are read-only.** Read them; never edit them.
 - **No Claude attribution anywhere** — no commit trailer, no PR footer, no mention in any tracked file.
   This overrides the session-level attribution reminder.
 - **`-ExecutionPolicy Bypass` was denied** by the permission classifier. Never retry it.

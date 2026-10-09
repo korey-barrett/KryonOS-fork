@@ -8,7 +8,7 @@ Supersedes the 2026-10-03 capture, whose §6 blocker (the CYD OTA failure) is no
 
 ## 1. What this project is
 
-`D:\KryonOS-fork` is a fork of **KryonOS** (`Haris16-code/KryonOS`) — an embedded GUI "operating
+`X:\KryonOS-fork` is a fork of **KryonOS** (`Haris16-code/KryonOS`) — an embedded GUI "operating
 system" for ESP32 / ESP32-S3. It runs a **Duktape** JavaScript runtime over **LittleFS / SD**, draws its
 UI through **TFT_eSPI**, and exposes a web file manager and a cloud service. It is driven today by
 PlatformIO + the Arduino framework.
@@ -34,11 +34,11 @@ delicate part of the codebase — see §6.
 
 | Item | Value |
 |---|---|
-| Working tree | `D:\KryonOS-fork` |
+| Working tree | `X:\KryonOS-fork` |
 | Only remote | `origin` → `https://github.com/korey-barrett/KryonOS-fork.git` |
 | Upstream | `Haris16-code/KryonOS` — **never touch, never add as a remote, never PR against** |
-| Read-only ground truth | `D:\KryonOS` (v2.0.0) — read, never edit |
-| Read-only reference | `D:\esp32s31_korvo1` — the Korvo-1 reference project |
+| Read-only ground truth | `X:\KryonOS` (v2.0.0) — read, never edit |
+| Read-only reference | `X:\esp32s31_korvo1` — the Korvo-1 reference project |
 | Current branch | `main` |
 | Version | `KRYONOS_VERSION` = **2.0.2** (`platformio.ini:49`) |
 | Working tree | clean |
@@ -355,7 +355,7 @@ touching anything:
 - Builds are sequential, one env per command.
 
 Recorded as memory files under
-`C:\Users\korey\.claude\projects\D--KryonOS-fork\memory\`; `MEMORY.md` is the index.
+`C:\Users\korey\.claude\projects\X--KryonOS-fork\memory\`; `MEMORY.md` is the index.
 
 ---
 
