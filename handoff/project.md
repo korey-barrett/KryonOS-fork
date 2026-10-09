@@ -308,18 +308,27 @@ and every LittleFS write are using, and which a flash write stalls outright. The
 boot and blown under load — which is why it appeared with a still page, cleared once, and then came
 back everywhere once the App Store drove a TLS handshake and its LittleFS writes through the same bus.
 
-**The fix** (`fa70f7b`): `cfg.timings.vsync_back_porch` **8 → 32** in
-`EspLcdRgbDisplay::setUpPanel()`, giving 35 lines (~1.2 ms) at **55.8 Hz** instead of 58.5. The only
-timing value that departs from the vendor sequence; the panel is DE-mode and takes the longer blanking.
-Confirmed on hardware: no flicker.
+**The fix** (`fa70f7b`, extended 2026-10-10): `cfg.timings.vsync_back_porch` **8 → 32**, then **32 → 64**,
+in `EspLcdRgbDisplay::setUpPanel()`. 32 gave 35 lines (~1.2 ms) at 55.8 Hz and did remove the coherent
+band — but on a re-test after a wipe it left a speckle that accumulated per bounce refill until the panel
+was re-initialised. 64 gives 67 lines (~2.3 ms) at about 52 Hz and clears both. Still the only timing
+value that departs from the vendor sequence; the panel is DE-mode and takes the longer blanking.
+Confirmed on hardware both times.
 
-**The signature is the diagnosis.** If this ever comes back, read the artifact's *shape* before
-touching anything:
+**Both artifacts are the same event**, which the 2026-10-10 re-test established by measurement rather
+than by shape: they are the restart landing before its window opens. Whole rows corrupt as speckle; the
+FIFO-preserve skip lands wrong as a single-pixel line. The rate does not scale with the VBlank count —
+the prebuilt libs restart on every field regardless — which is why widening the window is the only lever,
+and why doubling the bounce buffer only halved the *rate*: it halves how often a refill can miss, not how
+often the restart does. `num_fbs = 1` and `bounce_buffer_size_px = 0` both blank the screen, so neither
+can be traded away for margin.
+
+**The signature is the diagnosis.** If this ever comes back, read the artifact's *shape* first:
 
 | Shape | Cause | Fix |
 |---|---|---|
-| coherent lines travelling vertically | this — the restart missed its window | the porch value, §6.4 |
-| random speckle / white noise | the bounce refill starved by PSRAM contention | cut the contention, **not** the timing |
+| coherent lines travelling vertically | the restart missed its window | the porch value, §6.4 |
+| random speckle / white noise, accumulating until reset | the same late restart, whole rows rather than one skip | the porch value — **not** "PSRAM contention", which was this table's earlier and wrong reading |
 
 ### 6.5 Backend facts worth not re-deriving
 

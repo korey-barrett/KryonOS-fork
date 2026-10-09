@@ -548,7 +548,14 @@ bool EspLcdRgbDisplay::setUpPanel() {
     //
     // 32 makes the window 35 lines, ~1.2ms, for a refresh of 55.8Hz instead of 58.5. This is a DE-mode
     // RGB panel: it takes the longer blanking, and no other timing value changes.
-    cfg.timings.vsync_back_porch = 32;
+    // 64, not the 32 this was originally widened to. 32 removed the coherent band but left a
+    // per-bounce-refill speckle that accumulated until the panel was re-initialised. Measured on
+    // hardware, both artifacts are the same event: the restart landing before its window opens. The
+    // window is vsync_pulse_width + vsync_back_porch, so 3 + 64 = 67 lines (~2.3 ms at 16 MHz) is
+    // what it takes here, at about 52 Hz instead of 55.8. Narrower values bring the speckle back;
+    // doubling the bounce buffer only halved its rate, because that halves how often a refill can
+    // miss rather than how often the restart does.
+    cfg.timings.vsync_back_porch = 64;
 
     cfg.hsync_gpio_num = kHsyncPin;
     cfg.vsync_gpio_num = kVsyncPin;
