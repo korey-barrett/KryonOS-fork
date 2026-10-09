@@ -175,10 +175,12 @@ bool Gt911Driver::writeReg8(uint16_t reg, uint8_t value) {
 }
 
 bool Gt911Driver::readReg16(uint16_t reg, uint8_t* out, size_t length) {
-    uint8_t addr[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
-    if (!I2CEngine::writeRaw(address_, addr, sizeof(addr))) return false;
+    // Same repeated-START requirement as the GT1151 below: this is the other Goodix part in the
+    // file, it had the identical writeRaw/readRaw defect, and neither driver had been run against a
+    // panel before -- see the note on the capacitive set. Fixed here rather than left as a known
+    // copy of the same bug.
     std::vector<uint8_t> data;
-    if (!I2CEngine::readRaw(address_, length, data) || data.size() < length) return false;
+    if (!I2CEngine::readRegBytes16(address_, reg, length, data) || data.size() < length) return false;
     for (size_t i = 0; i < length; i++) out[i] = data[i];
     return true;
 }
@@ -280,5 +282,126 @@ bool Cst816Driver::readPoint(uint16_t* x, uint16_t* y) {
 
     *x = rx;
     *y = ry;
+    return true;
+}
+
+// --- GT1151 --------------------------------------------------------------------------------------
+//
+// The protocol is esp_lcd_touch_gt1151's, ported to this file's I2C helpers. See Gt1151Driver in the
+// header for the three ways it differs from the GT911 sitting above it -- the missing ready bit, the
+// frame checksum, and the 8-byte point stride.
+
+bool Gt1151Driver::writeReg8(uint16_t reg, uint8_t value) {
+    uint8_t frame[3] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF), value};
+    return I2CEngine::writeRaw(address_, frame, sizeof(frame));
+}
+
+bool Gt1151Driver::readReg16(uint16_t reg, uint8_t* out, size_t length) {
+    // Repeated START, via I2CEngine::readRegBytes16. The writeRaw/readRaw pair this replaces ended
+    // the register write with a STOP, and a Goodix part then answers from wherever its pointer was
+    // left rather than from the register asked for -- which is why the probe "succeeded" on bytes
+    // that were never the product id, with dead touch behind a driver reporting itself ready.
+    std::vector<uint8_t> data;
+    if (!I2CEngine::readRegBytes16(address_, reg, length, data) || data.size() < length) return false;
+    for (size_t i = 0; i < length; i++) out[i] = data[i];
+    return true;
+}
+
+bool Gt1151Driver::probe() {
+    if (!I2CEngine::ping(address_)) return false;
+
+    // 0x8140 is the product id. Reading it is what distinguishes a controller that is really there
+    // from one that merely holds the bus -- so this checks the CONTENT, which the first version did
+    // not: a bare "did the read return bytes" is true on an idle bus too.
+    //
+    // The three tests are esp_lcd_touch_gt1151's own (touch_gt1151_read_product_id): the 11-byte
+    // block sums to non-zero, the first three bytes are alphanumeric, and the sensor-id byte is not
+    // the 0xFF an unpopulated bus reads back as.
+    uint8_t buf[11] = {0};
+    if (!readReg16(0x8140, buf, sizeof(buf))) return false;
+
+    uint8_t checksum = 0;
+    for (size_t i = 0; i < sizeof(buf); i++) checksum = (uint8_t)(checksum + buf[i]);
+    if (checksum == 0) return false;
+    if (buf[10] == 0xFF) return false;
+
+    auto alnum = [](uint8_t c) {
+        return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z');
+    };
+    if (!alnum(buf[0]) || !alnum(buf[1]) || !alnum(buf[2])) return false;
+
+    return true;
+}
+
+bool Gt1151Driver::readPoint(uint16_t* x, uint16_t* y) {
+    // 0x814E is the report register: one status byte in, the whole frame readable from the same
+    // address. The vendor reads it twice -- once for the count, once for the frame.
+    uint8_t status = 0;
+    if (!readReg16(0x814E, &status, 1)) return false;
+
+    const int points = status & 0x0F;
+
+    // MAX_TOUCH_NUM in the vendor driver is 10; anything larger is a garbled read rather than a
+    // ten-fingered report. The register is also a latch, so it is cleared on every scan -- including
+    // the paths that report nothing, or the controller stops publishing new frames.
+    if (points == 0 || points > 10) {
+        writeReg8(0x814E, 0);
+        return false;
+    }
+
+    // status + one 8-byte record + the 2-byte checksum, matching DATA_BUFF_LEN(1).
+    uint8_t buf[11] = {0};
+    if (!readReg16(0x814E, buf, sizeof(buf))) return false;
+
+    // Clear only after the frame is captured, as the vendor does: writing 0 first would discard the
+    // report this scan is about to read.
+    writeReg8(0x814E, 0);
+
+    // Every byte of the frame, status included, sums to zero.
+    uint8_t sum = 0;
+    for (size_t i = 0; i < sizeof(buf); i++) sum = (uint8_t)(sum + buf[i]);
+    if (sum != 0) {
+        if (!checksumWarned_) {
+            checksumWarned_ = true;
+            Serial.printf("[TOUCH] gt1151 frame checksum failed (sum 0x%02X); frame ignored. Every "
+                          "frame failing is an address or wiring fault, not a panel one.\n",
+                          sum);
+        }
+        return false;
+    }
+
+    // The frame read from 0x814E is laid out exactly as esp_lcd_touch_gt1151's packed structs
+    // describe it:
+    //
+    //   buf[0]      touch count (low nibble)
+    //   buf[1]      track id (low nibble) + four reserved bits  <- the RECORD starts here
+    //   buf[2..3]   X, little endian                            <- but X starts at 2, not 1
+    //   buf[4..5]   Y, little endian
+    //   buf[6..7]   strength
+    //   buf[8]      spare
+    //   buf[9..10]  checksum
+    //
+    // Taking X from the record's first byte rather than the field's is an off-by-one, and it is the
+    // kind that does not look like one: X becomes (id | x_low << 8) and Y becomes (x_high | y_low <<
+    // 8). Both are plausible numbers, mostly outside the canvas, and toCanvas() clamps rather than
+    // rejects -- so every tap lands on an edge and the panel reads as dead instead of as wrong.
+    //
+    // X and Y are native panel pixels and are not masked, unlike the GT911's 12-bit fields:
+    // esp_lcd_touch uses x_max/y_max only for mirroring, so the values the BSP consumed were the raw
+    // ones too.
+    *x = (uint16_t)(buf[2] | ((uint16_t)buf[3] << 8));
+    *y = (uint16_t)(buf[4] | ((uint16_t)buf[5] << 8));
+
+    // The first few distinct contacts report their raw coordinates, so a controller that is reporting
+    // something other than panel pixels says so in the boot log instead of presenting as dead or
+    // mis-mapped touch. Same self-report Cst816Driver carries; printed on change so a held finger
+    // cannot spend the whole budget and leave every later tap unlogged.
+    if (touchesLogged_ < 8 && (*x != lastLoggedX_ || *y != lastLoggedY_)) {
+        touchesLogged_++;
+        lastLoggedX_ = *x;
+        lastLoggedY_ = *y;
+        Serial.printf("[TOUCH] gt1151 raw=(%u,%u) num=%u\n", (unsigned)*x, (unsigned)*y,
+                      (unsigned)points);
+    }
     return true;
 }

@@ -24,7 +24,7 @@ onto 2.0.2 with nothing else changed between the two runs. `FileSystem` gained
 `suspendSD()`/`resumeSD()` and `SettingsUI` now releases the volume around both `startFlashUpdate()`
 calls. Detail: `project.md` §5.3.
 
-**Active work has moved to the Waveshare 2.1B** (COM4). Its UI is 1.2x larger, its round-rect corners
+**Active work has moved to the Waveshare 2.1B.** Its UI is 1.2x larger, its round-rect corners
 are exact, the Time & Region footer keys work, and its RGB scanout no longer flickers — the last of
 those was a real bug in the panel timing, not boot state. Detail: `project.md` §6.
 
@@ -59,6 +59,9 @@ and none of them stops anything.
 - **Boot mode is a CYD-only concern.** The Waveshare 2.1B auto-resets over its own USB-serial and can
   be flashed directly. Only the CYD2USB needs the strap held by hand via the `esp_usb_board` bridge.
   Never pass esptool reset flags on either board.
+- **Port numbers do not survive an OS reinstall.** Re-enumerate with
+  `[System.IO.Ports.SerialPort]::GetPortNames()` before every flash; the COM4 / COM5 / COM6 mapping
+  from 2026-10-07 is void. Detail: `project.md` §3.
 - **Never wipe NVS on the CYD** — no offset-0x0 factory flash, no full erase. It holds the KryonCloud
   deviceId, and losing it forces a re-registration.
 - **No diagnostic firmware.** Read the library source and fix the cause in one change.

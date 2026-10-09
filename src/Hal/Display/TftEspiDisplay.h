@@ -1,6 +1,12 @@
 #ifndef TFT_ESPI_DISPLAY_H
 #define TFT_ESPI_DISPLAY_H
 
+// This backend IS TFT_eSPI -- it inherits it -- so it cannot exist on a target where the real library
+// is not built, which is what KRYONOS_KRYON_SPRITE marks. On the ESP32-S31 the shim answers to
+// <TFT_eSPI.h> instead, and every member this class forwards would simply be missing; the class is
+// therefore compiled out there and the RGB backend takes its place.
+#if !defined(KRYONOS_KRYON_SPRITE)
+
 #include <TFT_eSPI.h>
 
 #include "Hal/Display/KryonDisplay.h"
@@ -70,5 +76,7 @@ public:
     const char* backendName() const override { return "tft_espi"; }
     TFT_eSPI* nativeTft() override { return this; }
 };
+
+#endif // !KRYONOS_KRYON_SPRITE
 
 #endif // TFT_ESPI_DISPLAY_H

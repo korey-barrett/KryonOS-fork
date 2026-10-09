@@ -1,3 +1,7 @@
+// This backend IS TFT_eSPI -- see the note in TftEspiDisplay.h. It is compiled out wherever the
+// real library is not built (KRYONOS_KRYON_SPRITE), which on the ESP32-S31 is everywhere.
+#if !defined(KRYONOS_KRYON_SPRITE)
+
 #include "Hal/Display/TftEspiDisplay.h"
 
 // An abstract adapter would only be diagnosed where something constructs one, which is the board
@@ -121,3 +125,5 @@ uint16_t TftEspiDisplay::color565(uint8_t red, uint8_t green, uint8_t blue) {
 void TftEspiDisplay::setSwapBytes(bool swap) { TFT_eSPI::setSwapBytes(swap); }
 void TftEspiDisplay::startWrite() { TFT_eSPI::startWrite(); }
 void TftEspiDisplay::endWrite() { TFT_eSPI::endWrite(); }
+
+#endif // !KRYONOS_KRYON_SPRITE

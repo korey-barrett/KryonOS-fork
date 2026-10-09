@@ -51,25 +51,38 @@ Claude mentions on the remote, no `.claude/`, no `CLAUDE.md`.
 
 ## 3. Hardware in play
 
-| Port | Board | Notes |
-|---|---|---|
-| COM4 | Waveshare ESP32-S3-Touch-LCD-2.1B | 480x480 round ST7701 RGB panel, CST820 touch. **The board in active use.** |
-| COM5 | ESP32-S31-Korvo-1 | the port target |
-| COM6 | ESP32 CYD2USB ("CYD", 2.8") | classic ESP32-D0WD-V3 rev 3.1, 4 MB flash, MAC `a4:f0:0f:5c:b7:bc` |
+**Port numbers do not survive an OS reinstall.** The Windows 11 reinstall of 2026-10-09 reassigned
+them, so the COM4 / COM5 / COM6 mapping in the 2026-10-07 capture is void. Re-enumerate before every
+flash — `[System.IO.Ports.SerialPort]::GetPortNames()` — rather than carrying a number forward.
 
-**Only COM6 goes through an `esp_usb_board` bridge**, and that is the whole basis of the boot-mode
+The only serial device present on 2026-10-10, and the port the S31 bring-up is using:
+
+| Port | Board | Bridge identity |
+|---|---|---|
+| COM3 | ESP32-S31-Korvo-1 (stated by the user, 2026-10-10) | Silicon Labs CP210x, `USB\VID_10C4&PID_EA60\F4EDDE590D72F01185C5FF9E1045C30F` |
+
+The enumeration identifies the **bridge**, not the board, so which board sits on a port is not
+something the port tells you. Re-check the number before flashing: the next reinstall, or a different
+USB socket, moves it again.
+
+| Board | Board-specific rule |
+|---|---|
+| Waveshare ESP32-S3-Touch-LCD-2.1B | 480x480 round ST7701 RGB panel, CST820 touch. Auto-resets over its own USB-serial; flashed plainly with `pio run -e waveshare-s3-lcd21b -t upload --upload-port <port>`. |
+| ESP32-S31-Korvo-1 | the port target |
+| ESP32 CYD2USB ("CYD", 2.8") | classic ESP32-D0WD-V3 rev 3.1, 4 MB flash, MAC `a4:f0:0f:5c:b7:bc` |
+
+**Only the CYD goes through an `esp_usb_board` bridge**, and that is the whole basis of the boot-mode
 rule. Two consequences:
 
 - **Boot mode must be enabled manually** before any esptool operation on the CYD, and re-enabled after
   one.
 - **In manual boot mode the application is not running** — only an esptool-ready ROM bootloader. So
-  runtime serial logs are **impossible** on the CYD. Opening COM6 parks the chip regardless of DTR/RTS.
-  A capture returns only the 30-byte `ets Jul 29 2019 12:21:46` ROM banner.
+  runtime serial logs are **impossible** on the CYD. Opening the CYD's port parks the chip regardless
+  of DTR/RTS. A capture returns only the 30-byte `ets Jul 29 2019 12:21:46` ROM banner.
 
-**COM4 does not work this way.** The 2.1B auto-resets over its own USB-serial and is flashed plainly
-with `pio run -e waveshare-s3-lcd21b -t upload --upload-port COM4`. The user confirmed on 2026-10-07
-that the boot-mode confirmation rule is CYD-only. Never pass `--before`/`--after` reset flags on
-either board.
+**The 2.1B does not work this way.** It auto-resets over its own USB-serial. The user confirmed on
+2026-10-07 that the boot-mode confirmation rule is CYD-only. Never pass `--before`/`--after` reset
+flags on any board.
 
 Toolchain lives at `C:\Users\korey\.platformio\penv\Scripts\` — `pio.exe`, `python.exe`, and
 **`esptool.exe`** (not `esptool.py`; esptool v5.4.0).
@@ -95,7 +108,8 @@ examples, kept under `src/Hal/Boards/board_configs/examples/` and not built.
 | `esp32-default` | ESP32 | `huge_app.csv` (one 3 MB slot) | **no** — `Update.begin()` returns `UPDATE_ERROR_NO_PARTITION`, surfaced as a normal error, no crash |
 | `esp32-cyd-28` | ESP32 | `min_spiffs.csv` (two 1.875 MB slots) | **yes — the one OTA was tested on** |
 | `waveshare-s3-lcd21b` | ESP32-S3 | `default_16MB.csv` | yes |
-| `esp32s31-default` | ESP32-S31 | — | preview only, not in `default_envs`, not yet ported to the Arduino 4.x API |
+| `esp32s31-korvo1` | ESP32-S31 | platform/board default (6,553,600-byte app slot) | **built and flashed — see §11** |
+| `esp32s31-default` | ESP32-S31 | — | the placeholder, superseded by `esp32s31-korvo1` above. Kept, not in `default_envs` |
 
 **Resolution is a build flag, never a C++ constant.** `KRYONOS_DISPLAY_WIDTH` / `_HEIGHT` / `_ROTATION`
 in `platformio.ini`; `UiLayout` and `Display` are the runtime source of truth.
@@ -106,6 +120,12 @@ in `platformio.ini`; `UiLayout` and `Display` are the runtime source of truth.
 
 - **The S31 and the 3.x core evict each other** from the PlatformIO package cache. Use a separate
   `PLATFORMIO_CORE_DIR` if switching between them often.
+- **The RISC-V toolchain arrives with the container directory UN-STRIPPED.** `idf_tools` extracts it as
+  `toolchain-riscv32-esp/riscv32-esp-elf/bin/`, but PlatformIO looks for `bin/` at the package root, so
+  the compiler exists and is invisible — the build dies with `'riscv32-esp-elf-g++' is not recognized`
+  after a 1.1 GB download. Junctioning each payload directory up to the package root fixes it without
+  re-downloading (the container's own `riscv32-esp-elf` subdirectory is the GCC sysroot and must become
+  a link named `riscv32-esp-elf` at the root, not be left as the container). See §11.
 - **The RISC-V toolchain installs by hand** — PlatformIO leaves a 1.6 KB manifest where the compiler
   should be; extract the 964 MB zip yourself.
 - **TFT_eSPI cannot target the S31.** The legacy backend produced 130 IDF-6.1 errors. An `esp_lcd`
@@ -161,7 +181,7 @@ Partition arithmetic worth keeping:
 - `nvs` is at 0x9000 in both tables, so **WiFi credentials survive** a table change.
 - `spiffs` moves 0x310000 → 0x3D0000, so **LittleFS contents do not** — the first flash of the new
   table wipes installed apps.
-- The partition table **cannot be changed by OTA**. One wire-flash over COM6 is mandatory before any
+- The partition table **cannot be changed by OTA**. One wire-flash over the CYD's USB port is mandatory before any
   in-place update can work. That has been done.
 - LittleFS is now 128 KB (down from 896 KB under `huge_app`). That is arithmetic, not a config choice:
   4 MB cannot hold a 3 MB app, ~900 KB of filesystem, *and* two 1.9 MB OTA slots.
@@ -195,7 +215,7 @@ and `OTAManager.cpp` is now upstream's file with the single manifest-URL express
 
 ## 6. The Waveshare 2.1B display work (current focus)
 
-All of §6 landed 2026-10-07 and is verified on hardware on COM4, except where noted.
+All of §6 landed 2026-10-07 and is verified on hardware on the Waveshare 2.1B, except where noted.
 
 ### 6.1 The UI is 1.2x larger
 
@@ -378,3 +398,127 @@ Recorded as memory files under
   (`AppStoreUI.cpp:78`), `help/*.json`, README badges.
 - `EspLcdRgbDisplay`'s bring-up doc comments (`UiLayout.h:77-79`) describe a `setTextSize()` call the
   backend does not make. Correct the wording; do not add a no-op call.
+
+---
+
+## 10. The Korvo-1's panel has no GRAM, so a repaint is visible while it happens
+
+*(Numbered 10 rather than slotted beside §6 because §6 is the Waveshare's work and renumbering it
+would invalidate the §6.4 / §7 / §8 cross-references above.)*
+
+The ESP32-S31-Korvo-1's 800x480 RGB panel has **no frame memory of its own**. Every other board in
+this fork hides a half-drawn state behind the controller's GRAM: the panel holds a complete frame
+and scans that, so the CPU may write behind it freely. This panel scans the frame buffer directly,
+and on this backend the canvas **is** that buffer — one allocation (`num_fbs = 1`), written by the
+CPU and read out by the RGB DMA at the same time.
+
+**The consequence.** While a region is being repainted, the scanout can catch it part-drawn. That is
+what "the New Code and Cancel buttons on the KryonCloud Link screen tore, then corrected
+themselves" is: the buttons were drawn while the DMA was reading those rows, and once the repaint
+finished and nothing further was written, the panel repeated the finished frame and the artifact
+went on its own. It is **self-clearing and expected** — not a fault, and not something to chase.
+
+**Why it is not simply fixed.** Both obvious answers are closed on this part:
+
+- **Bounce buffer** is what this board ran before, and it produced a *permanent* displaced picture.
+  The driver tracks scanout progress in a software counter that only advances when its refill
+  interrupt beats the DMA, and the desync recovery path is guarded by
+  `RGB_LCD_NEEDS_SEPARATE_RESTART_LINK`, which is defined **only for the ESP32-S3**. On the S31 that
+  code is not compiled, so one missed refill offsets every later slice for good, and the public
+  `esp_lcd_rgb_panel_restart()` returns `ESP_ERR_NOT_SUPPORTED`. Hence `bounce_buffer_size_px = 0`.
+- **A page flip** needs that same restart path, so double buffering is unavailable for the same
+  reason.
+
+So the backend trades an artifact that is visible during a repaint for the absence of one that never
+goes away. That is the right side of the trade on this silicon.
+
+**Read the shape before touching anything** — §6.4's table applies to this panel too, and its rows
+want opposite responses:
+
+| Shape | Meaning | Response |
+|---|---|---|
+| brief tearing confined to a region just redrawn, then gone | this | none — expected |
+| coherent lines travelling vertically, persisting | the VBlank restart missed its window | the porch value, §6.4 |
+| random speckle / white noise | the scanout starved by PSRAM contention | cut the contention, **not** the timing |
+
+Detail: `src/Hal/Display/KorvoRgbDisplay.h` ("WHY THE PANEL IS NOT IN BOUNCE BUFFER MODE",
+"WHY present() IS NOT EMPTY"), and `Documentation/Display_Touch_Architecture.md` §2.5 for the
+non-TFT_eSPI backend seam.
+
+---
+
+## 11. The ESP32-S31-Korvo-1 port — done, verified on hardware
+
+*(The fork's reason for existing. §4's environment table and §5 predate it; §4 called the chip "not yet
+ported to the Arduino 4.x API", which is no longer true.)*
+
+**State.** `esp32s31-korvo1` builds with **PlatformIO / arduino-esp32 alone** — no IDF build system and
+no BSP — and runs on the board: the 800x480 panel and the GT1151 touch both verified on COM3.
+`firmware.bin` is 2,121,616 bytes; flash 30.8% of 6,553,600, RAM 28.6% of 327,680.
+
+**The environment** (`platformio.ini`, `[env:esp32s31-korvo1]`):
+
+- pioarduino pre-release `61.04.00-RC1` (Arduino 4.0.0-RC1 / IDF 6.1) — the only spec that ships an
+  `esp32s31` toolchain.
+- `TARGET_ESP32S31_KORVO1`, `KRYONOS_DISPLAY_BACKEND=KRYONOS_BACKEND_RGB`, `KRYONOS_KRYON_SPRITE=1`,
+  800x480 at rotation 0, `KRYONOS_TOUCH_DRIVER="gt1151"`, touch I2C on SDA 0 / SCL 1.
+- **No `bodmer/TFT_eSPI`** — it cannot compile for this chip at all (§5.2), and a child env's `lib_deps`
+  *replaces* `[env]`'s rather than extending it, which is the only way to drop one library.
+
+**How the board is wired in** — all of it in `src/`, so the PlatformIO build and the IDF one share it:
+
+- the rasterizer (`KryonText`, `KryonSprite`, the `TFT_eSPI.h` shim, the vendored fonts) moved out of
+  `idf/components/kryonos_s31_display/` into `src/Hal/Display/`. That component now compiles it *from*
+  `src/` rather than from a copy — the rule its `RamFramebufferDisplay` entry already followed.
+- `KorvoRgbDisplay` configures the panel through `esp_lcd` directly. The values Espressif's BSP used —
+  pins, timings, frame-buffer count — are vendored into it and marked at their source, because the BSP
+  is an IDF-only component and this board also builds where none exists.
+- `Gt1151Driver` brings the controller up at register level. **The part identifies as a GT1158**; the
+  driver name is the family.
+- **`KRYONOS_KRYON_SPRITE` is the single switch for "this environment has no real TFT_eSPI"**: it
+  selects the rasterizer, puts the shim on the include path, and compiles out `TftEspiDisplay` (which
+  *inherits* `TFT_eSPI`, so once the shim answers to `<TFT_eSPI.h>` every member it forwards vanishes).
+- `build_src_filter` excludes `src/Hal/Display/fonts/` at `[env]` level — those `.c` files are fragments
+  meant to be `#include`d, and PlatformIO sweeps every `.c` under `src/`.
+
+**Three environment facts that are NOT in the repo**, each of which cost real time:
+
+1. **PlatformIO Core 6.2.0**, in `C:\Users\korey\.platformio\penv` — matching what upstream's unpinned CI
+   resolves to and what this repo's own generated `.vscode/c_cpp_properties.json` recorded
+   (`PLATFORMIO=60200`).
+2. **The toolchain package must have its container directory stripped** — §4's traps.
+3. **`MSYSTEM` has to be cleared for anything PlatformIO runs through `idf_tools.py`**, which refuses
+   MSys/Mingw outright. `unset MSYSTEM` in bash does **not** work here: the harness re-injects it into
+   every child, so even `python -c "os.environ"` sees it. `set MSYSTEM=` *inside cmd* is the only thing
+   that does. That is why the first esptool install failed — and why a "frozen" build window was really a
+   silent 1.1 GB tool download, since `idf_tools --quiet` prints nothing at all.
+
+**Five bugs found on the way, all fixed and pushed:**
+
+| Commit | What it was |
+|---|---|
+| `2ef03e4` | `isReservedSystemPin()` picks its list by chip family, and the S31 fell into the classic-ESP32 branch — which reserves GPIO 1 as UART0. `I2CEngine::begin()` refused the touch bus outright. A board naming `KRYONOS_TOUCH_I2C_SDA/_SCL` now outranks the heuristic. |
+| `a76f9e1` | `readReg16` ended the register write with a STOP; Goodix parts need a repeated START, so the read served whatever the pointer held. `readRegBytes16()` added and both Goodix drivers use it. The probe also validated nothing — four bytes back was enough — so it reported "ready" over an idle bus. |
+| `77b5ea4` | the GT1151 point was parsed one byte early, from the record's track-id byte rather than the X field, giving plausible-but-off-canvas coordinates that clamped to an edge. |
+| `21dc1f2` | `nativeTft()` returned the shim, but nothing ever called `setDisplay()`, so every sprite's push target was null and **every `pushSprite()` on this board was a silent no-op**. |
+| `4706e62` | `JSBindings::cleanup()` released the I²C bus on **every app exit** — see below. |
+
+**The last one deserves its own note: it is invisible in the source and cost an afternoon.** An app
+exited cleanly and `runApp()` drew its red exit button, but the screen then never changed and tapping
+did nothing — which reads exactly like a hung app. The cause is that `cleanup()` did `Wire.end()` on the
+bus the touch controller lives on, and every touch read begins with `if (!s_initialized …) return false`.
+Nothing re-arms it: `I2cTouchDriver::begin()` only calls `I2CEngine::begin()` when the bus is not yet up,
+and that runs at boot. **Not S31-specific** — every I²C-touch board had it (the Waveshare's CST820 is on
+the same bus), and this is merely the first board where an app could be run, exited, and then still need
+touch.
+
+**Not done:**
+
+- **The upstream PR is held**, pending a re-test on a clean install.
+- **`System.i2c.end()`/reset remain exposed to apps**, which would leave the OS in the same blind state
+  the last fix removed the automatic path to. The bus being a platform-owned resource is enforced
+  nowhere.
+- **Cube3d (App Store, third-party) renders ~0.6 s/frame at 800x480** — it was written for 240x320 and
+  draws 15 slices a frame. Its exit button needs the app to poll touch during the press, so at that frame
+  rate it wants a deliberate hold. App-side, not the port.
+- `esp32s31` variant branch is re-synced by the commit that carries this note.
