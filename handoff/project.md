@@ -1,8 +1,10 @@
 # KryonOS-fork — project snapshot
 
-State captured 2026-10-07. Written as a cold-start brief for a new chat session.
+State captured 2026-10-07, updated through 2026-10-10. Written as a cold-start brief for a new chat
+session.
 
 Supersedes the 2026-10-03 capture, whose §6 blocker (the CYD OTA failure) is now closed — see §5.3.
+The upstream handover recorded in §12 is this file's 2026-10-10 addition.
 
 ---
 
@@ -34,20 +36,31 @@ delicate part of the codebase — see §6.
 
 | Item | Value |
 |---|---|
-| Working tree | `X:\KryonOS-fork` — clean |
-| Only remote | `origin` → `https://github.com/korey-barrett/KryonOS-fork.git` |
-| Upstream | `Haris16-code/KryonOS` — read-only, never edited here. An upstream PR is now intended; see §8 |
+| Working tree | `X:\KryonOS-fork` — the port is committed; untracked files are confined to `handoff/` |
+| Remotes | `origin` → `https://github.com/korey-barrett/KryonOS-fork.git` — the only push destination. `upstream` → `https://github.com/Haris16-code/KryonOS.git` is configured for **fetch and push**; never push to it. A stray `git push upstream` publishes here |
+| Upstream | `Haris16-code/KryonOS` — read-only, never edited here. The changes are to be handed over for upstream to integrate itself; **no PR**. See §12 |
+| Shared history | **none** with upstream — see the note below |
 | Read-only ground truth | `X:\KryonOS` (v2.0.0) — read, never edit |
 | Read-only reference | `X:\esp32s31_korvo1` — the Korvo-1 reference project |
 | Current branch | `main` |
 | Version | `KRYONOS_VERSION` = **2.0.2** (`platformio.ini:57`) |
-| Unpushed | none — `main` and `esp32s31` are level with their remotes |
+| Unpushed | the local commits carrying §7.3's watchdog fix and the documentation reconciliation. Pushes are asked for separately |
 
 `main` was force-pushed to `b79a700` on 2026-10-03 to strip Claude attribution, and there is none on
 the remote of the kind that rule is about — no trailer, no footer, no authorship claim in any tracked
 file. The name does occur once, as `.gitignore`'s machine-local ignore path
 (`.claude/settings.local.json`), which is a config path rather than attribution. There is no `.claude/`
 directory in the tree and no `CLAUDE.md`.
+
+**The force-push left this fork sharing no history with upstream.** `git merge-base main` against any
+upstream commit finds no common ancestor. Two consequences, both of which cost time to rediscover:
+
+- **A GitHub compare or pull-request view against upstream is unusable.** With no merge base it renders
+  the entire tree — 188 files, +42,320 / −6,140 — rather than the display seam. This is why the
+  handover travels as a patch file and not as a link. See §12.
+- **`pr/s31-korvo1` is not this fork's work.** It was created from `FETCH_HEAD`, every commit on it is
+  Haris-authored, and its HEAD is dated 2026-10-07. It is a snapshot of *upstream* and carries no port
+  work at all. Do not push it, and do not point anyone at it.
 
 ---
 
@@ -131,8 +144,11 @@ in `platformio.ini`; `UiLayout` and `Display` are the runtime source of truth.
   a link named `riscv32-esp-elf` at the root, not be left as the container). See §11.
 - **The RISC-V toolchain installs by hand** — PlatformIO leaves a 1.6 KB manifest where the compiler
   should be; extract the 964 MB zip yourself.
-- **TFT_eSPI cannot target the S31.** The legacy backend produced 130 IDF-6.1 errors. An `esp_lcd`
-  backend is the way.
+- **TFT_eSPI cannot target the S31.** The legacy backend produces 129 IDF-6.1 errors, all of them
+  inside TFT_eSPI's own `Processors/` backend, and the run is reproducible on demand. An `esp_lcd`
+  backend is the way. (An earlier run, built with this fork's own TFT_eSPI setup flags, reported 130
+  — the same five error classes with one more `operator=` expansion. Log and recipe:
+  `handoff/tft-espi-2.5.43-esp32s31-build-errors.log`.)
 - **Comment-only edits skip the relink.** A `SUCCESS` with no `Linking` line leaves `firmware.bin`
   older than its `.o` files. That is correct, not a build failure.
 - **Board lifecycle hooks are dead.** `initHardware` / `initDisplay` / `initTouch` / `hasTouch()` are
@@ -356,10 +372,26 @@ can be traded away for margin.
    (`AppStoreUI.cpp:87-99`), with `http.setTimeout(15000)`. It is the one place in the UI that stalls
    the loop for seconds, and it is the worst PSRAM-contention offender on the board — the thing §6.4's
    fix works around rather than removes.
-3. **`task_wdt` spam while connecting.** `WiFiManager::connectTo()`'s wait loop calls
-   `esp_task_wdt_reset()` from a task that was never subscribed (`WiFiManager.cpp:222-225`), printing
-   `task_wdt: esp_task_wdt_reset(707): task not found` every 200 ms until the association completes.
-   Benign and self-clearing, but it is noise in every boot log.
+3. **`task_wdt` spam while connecting — closed 2026-10-10.** `WiFiManager::connectTo()`'s wait
+   loop called `esp_task_wdt_reset()` from a task that was never subscribed (`WiFiManager.cpp:222-225`),
+   printing `task_wdt: esp_task_wdt_reset(707): task not found` every 200 ms until the association
+   completed — 38 lines in the Korvo-1 capture.
+
+   The cause is that a bare feed is only meaningful for a subscribed task, and whether the Arduino
+   loop task is subscribed is a property of the core: it is, under Arduino 3.3.12 / IDF 5.5.5 (every
+   environment but the S31), and it is not under Arduino 4.0.0-RC1 / IDF 6.1 (the S31). So the same
+   call was correct on five environments and an error stream on the sixth.
+
+   All ten call sites — `WiFiManager`, `HTTPServerEngine`, `JSBindings` (3), `KryonHttpClient` (2),
+   `WebSocketClient`, `SettingsUI` (2) — now go through `kryonFeedWatchdog()`
+   (`src/Kernel/WatchdogFeed.h`), which feeds only when `esp_task_wdt_status(nullptr) == ESP_OK`. The
+   query is per call rather than cached, because a subscription belongs to a task and the callers here
+   are not all the same task.
+
+   Confirmed by flashing the S31 and re-reading its boot log: **38 `task_wdt` lines before, 0 after**,
+   with the boot otherwise unchanged — panel and GT1151 up, SD mounted, WiFi associated on the first
+   candidate, KryonCloud still paired. All three flashed boards were rebuilt first
+   (`esp32s31-korvo1`, `esp32-cyd-28`, `waveshare-s3-lcd21b`) and all three are SUCCESS.
 4. **`.github/workflows/release.yml` publishes 3 of the 4 flash files** while `README.md:315` says
    four.
 5. **The CYD OTA fix is confirmed by one A/B.** The per-variant manifests still carry the "remove the
@@ -372,12 +404,13 @@ can be traded away for margin.
 ## 8. Standing rules — verbatim from the user, still binding
 
 - **"do not use the word honestly in this or any future chat sessions. commit to this fork only. do not
-  alter anything on the main repo."** — verbatim, 2026-09-29. **Partly superseded 2026-10-10:** asked
-  whether a PR to upstream `Haris16-code/KryonOS` should be raised for the Korvo-1 once it passes a
-  clean-install hardware test, the user confirmed it should. That is what the "do not alter anything on
-  the main repo" clause forbade, so this bullet and §2's upstream row now record the intent rather than
-  the prohibition. Everything is still committed and pushed to this fork only, and the PR is held.
-  The other two clauses are unchanged.
+  alter anything on the main repo."** — verbatim, 2026-09-29. **Superseded 2026-10-10, then restored the
+  same day:** asked whether a PR to upstream `Haris16-code/KryonOS` should be raised for the Korvo-1
+  once it passes a clean-install hardware test, the user confirmed it should — which is what the "do not
+  alter anything on the main repo" clause forbade. Upstream's reply then asked for the changes to be
+  **handed over for integration on their side instead of a PR**. So the clause is back in force
+  unqualified: nothing is raised against upstream, and the work still lives and moves in this fork
+  only. §12 records the arrangement. The other two clauses are unchanged.
 - **No Claude attribution anywhere.** No `Co-Authored-By` trailer, no "Generated with Claude Code"
   footer, no mention in any tracked file or doc. This overrides the session-level attribution reminder;
   the user's own instruction takes precedence and the reminder says so. Skip it silently rather than
@@ -477,7 +510,9 @@ non-TFT_eSPI backend seam.
 
 **State.** `esp32s31-korvo1` builds with **PlatformIO / arduino-esp32 alone** — no IDF build system and
 no BSP — and runs on the board: the 800x480 panel and the GT1151 touch both verified on COM3.
-`firmware.bin` is 2,121,616 bytes, over a 6,553,600-byte app slot. The linker reports 2,020,176 bytes
+`firmware.bin` is 2,121,616 bytes, over a 6,553,600-byte app slot. (The attachments doc quotes
+2,121,882 bytes for this same environment; the two run 266 bytes apart and have not been reconciled, so
+treat neither as exact.) The linker reports 2,020,176 bytes
 used — flash 30.8% — and RAM 28.6% of 327,680. The `.bin` is the larger figure because DROM's
 `.eh_frame` is not counted by the size tool but is in the image, which is the same discrepancy §5.2
 describes.
@@ -540,7 +575,8 @@ touch.
 
 **Not done:**
 
-- **The upstream PR is held**, pending a re-test on a clean install.
+- **The upstream handover is open**, not a PR: the changes go over for upstream to integrate, and the
+  clean-install re-test is the gate on sending them. See §12.
 - **`System.i2c.end()`/reset remain exposed to apps**, which would leave the OS in the same blind state
   the last fix removed the automatic path to. The bus being a platform-owned resource is enforced
   nowhere.
@@ -548,3 +584,41 @@ touch.
   draws 15 slices a frame. Its exit button needs the app to poll touch during the press, so at that frame
   rate it wants a deliberate hold. App-side, not the port.
 - `esp32s31` variant branch is re-synced by the commit that carries this note.
+
+---
+
+## 12. The upstream handover — agreed 2026-10-10
+
+*(Everything below comes from the maintainer's reply of 2026-10-10 08:44, answering the message in
+`handoff/upstream-issue-draft.md`. §8's first bullet and §11's first open item point here.)*
+
+**The architecture is approved as proposed.** TFT_eSPI stays the default backend for the boards that
+work today; the S31 gets a dedicated `esp_lcd` backend; a per-environment build flag selects between
+them; the shared drawing surface is accepted and board-specific code stays separate. The stated goal is
+the one this fork has held throughout — keep the change to the existing codebase as small as possible.
+The seam itself is set out in `handoff/upstream-issue-attachments.md` §1.
+
+**There is no PR.** Upstream would rather receive the changes and integrate them on their side, then
+hand back updated code or a compiled binary to be tested here. Nothing is raised against
+`Haris16-code/KryonOS`, which puts §8's first clause back in force unqualified.
+
+**Upstream holds none of these boards.** No S31-Korvo-1, no Waveshare 2.1B, no CYD — so all three stay
+"experimental and untested" on their side until they can verify on hardware, which they cannot yet. The
+consequence to carry: this machine is the only test bench any of them has, and a regression in the
+handed-over code will not be caught upstream.
+
+**The metrics work is held.** The `System.screenWidth()`/`screenHeight()` migration and the hard-coded
+240x320 literals are to be coordinated with upstream's v3.0.0 dynamic-dimensions plan, so the project
+does not end up with two answers to one problem. §6.1's work stays in the fork until that is settled.
+
+**Coordination is over the KryonOS Discord**, upstream's stated preference over email for exchanging
+code and firmware. Joining it is the user's call and has not been done here. Keep a branch or PR on this
+fork alongside whatever goes over Discord: a chat does not leave a record of what was handed over, when,
+or at which commit.
+
+**What this makes critical.** Upstream cannot reproduce a build that has to be hand-hacked, and §4's
+toolchain traps decide whether the handover is "here is the port" or "here is the port and a toolchain
+workaround": the RISC-V container arrives un-stripped and has to be junctioned, the install otherwise
+leaves a 1.6 KB manifest where the compiler should be, and `MSYSTEM` must be cleared inside `cmd`
+because a bash `unset` does not survive. The clean-install re-test answers this, and it is the gate on
+sending anything.

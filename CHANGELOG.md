@@ -98,9 +98,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
     out of PSRAM every ~300 us (`esp_lcd_panel_rgb.c:913`) — the same PSRAM WiFi, mbedTLS and every
     LittleFS write are using, and which a flash write stalls outright. The margin was thin at boot and
     gone under load, which is why opening the App Store made it permanent.
-  - `vsync_back_porch` is now **32**, giving 35 lines (~1.2 ms) at 55.8 Hz instead of 58.5. It is the
-    one timing value that departs from the vendor sequence; the panel is DE-mode and takes the longer
-    blanking. Confirmed on hardware.
+  - `vsync_back_porch` is now **64**, giving 67 lines (~2.3 ms) at about 52 Hz. **32** — the value this
+    was first widened to — removed the coherent band but left a white speckle that accumulated until
+    the panel was re-initialised; both artifacts are the same event, the restart landing before its
+    window opens, and 64 is what it takes here. Narrower values bring the speckle back, and doubling
+    the bounce buffer only halved its rate, because that halves how often a refill can miss rather
+    than how often the restart does. It is the one timing value that departs from the vendor sequence;
+    the panel is DE-mode and takes the longer blanking. Both cleared on hardware.
+- **The task watchdog is no longer fed blindly.** Ten `esp_task_wdt_reset()` calls — the WiFi
+  association wait loop, the HTTP/WebSocket poll loops, two settings screens and three JS-binding
+  loops — fed the TWDT unconditionally, and a task that is not subscribed gets refused with
+  `task_wdt: esp_task_wdt_reset(707): task not found` logged **per call**, which in a 200 ms poll loop
+  is 38 error lines per boot on the ESP32-S31-Korvo-1. Whether the Arduino loop task is subscribed is
+  a property of the core: it is under Arduino 3.3.12 / IDF 5.5.5, and it is not under Arduino
+  4.0.0-RC1 / IDF 6.1, so the same calls were correct on five environments and an error stream on the
+  sixth. They now go through `kryonFeedWatchdog()` (`src/Kernel/WatchdogFeed.h`), which feeds only when
+  `esp_task_wdt_status()` says the calling task is subscribed — asked per call, since the callers are
+  not all the same task. Confirmed on the Korvo-1: 38 lines before the fix, 0 after it.
 
 ---
 

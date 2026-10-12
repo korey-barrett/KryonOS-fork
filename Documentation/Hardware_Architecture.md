@@ -60,7 +60,7 @@ RGB backend and touch by the GT1151, both described in
 `pio run -e esp32s31-korvo1`.
 
 `esp32s31-default` is the older chip placeholder and still does not link: the framework's own libraries
-all compile, then **TFT_eSPI fails with 130 IDF-6.1 errors** in its legacy ESP32 backend — which is
+all compile, then **TFT_eSPI fails with 129 IDF-6.1 errors** in its legacy ESP32 backend — which is
 precisely why the `esp_lcd` backend above exists rather than a newer TFT_eSPI. Neither environment is
 in `default_envs`.
 

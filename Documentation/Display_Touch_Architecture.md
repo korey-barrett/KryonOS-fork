@@ -60,7 +60,7 @@ and add it to `default_envs` once it compiles. See §5 for the toolchain details
 
 **The env does not build yet, and the blocker is TFT_eSPI, not the OS.** A full run
 (2026-10-03) compiled the entire framework — `Network`, `AsyncTCP`, `Hash`, the Arduino `WebServer`,
-`WiFi` — and then died inside TFT_eSPI with **130 errors, all in its legacy
+`WiFi` — and then died inside TFT_eSPI with **129 errors, all in its legacy
 `Processors/TFT_eSPI_ESP32.{h,c}` backend**; nothing in `src/` was ever reached. That is the Phase 5
 case: the S31's SPI/GPIO peripherals are not the ones TFT_eSPI register-pokes, so the S31 needs an
 `esp_lcd` backend (§5.2).
@@ -629,16 +629,22 @@ is **not** the fix — `-p` means *platform*, and it fails with `MissingPackageM
 Nothing at any TFT_eSPI version drives the S31, and no fork adds it:
 
 - **V2.5.43** (the newest published release, and what the PlatformIO registry resolves) fails to
-  compile for S31 with **130 errors**, every one of them in
+  compile for S31 with **129 errors**, every one of them in
   `Processors/TFT_eSPI_ESP32.h` / `.c`:
 
   | Count | Error | Cause on S31 |
   | --- | --- | --- |
   | 67 | `'VSPI' was not declared` | `#define SPI_PORT VSPI` — no `VSPI` global |
-  | 44 | `no match for 'operator=' … 'gpio_out_w1ts_reg_t' and 'int'` | `GPIO.out_w1ts = (1 << pin)` — the S31 makes these a bitfield *struct*, not an integer |
+  | 43 | `no match for 'operator=' … 'gpio_out_w1ts_reg_t' and 'int'` | `GPIO.out_w1ts = (1 << pin)` — the S31 makes these a bitfield *struct*, not an integer |
   | 12 | `invalid operands of types 'void' and 'long unsigned int'` | `READ_PERI_REG` / `SET_PERI_REG_MASK` now yield `void` |
   | 6 | `'SPI_MOSI_DLEN_REG' was not declared` | renamed (compiler suggests `SPI_MS_DLEN_REG`) |
   | 1 | `'VSPI_HOST' was not declared` | same root cause as `VSPI` |
+
+  Reproducible on demand: a throwaway project pinning `bodmer/TFT_eSPI @ 2.5.43` with a sketch whose
+  body is `#include <TFT_eSPI.h>`, built for `esp32-s31-coreboard-1` on pioarduino `61.04.00-RC1`.
+  Verbatim log in `handoff/tft-espi-2.5.43-esp32s31-build-errors.log`. (The 2026-10-03 run above
+  reported 130 — the same classes with one more `operator=` expansion, because it compiled with this
+  fork's own TFT_eSPI setup flags.)
 
 - **master** (HEAD `16e37595040e`, 19 commits ahead) changes none of this: `Processors/` is the
   identical set of eight backends, `TFT_eSPI.h` still branches only to S3 and C3, and

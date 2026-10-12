@@ -7,11 +7,17 @@ re-deriving it.
 |---|---|
 | `readme.md` | this file — orientation, current state, first move |
 | `project.md` | the full technical state: hardware, environments, what is done, what is broken, standing rules |
+| `upstream-issue-draft.md` | the message that put the display seam up for discussion before writing any PR. Upstream's 2026-10-10 reply answers it point by point; its own header still reads "not sent", which is stale. Outcome: `project.md` §12 |
+| `upstream-issue-message.txt` | the same message as plain text, without the markdown tables |
+| `upstream-issue-attachments.md` | the evidence pack that went with it — the `KryonDisplay` seam in full, the TFT_eSPI reproduction recipe, and the build and boot captures |
+| `upstream-reply-draft.md` | the reply to the maintainer's 2026-10-10 answer — agrees the handover, raises the clean-build question, and sizes the change set. Draft only, not sent |
+| `tft-espi-2.5.43-esp32s31-build-errors.log` | the verbatim 2,131-line log behind "TFT_eSPI cannot compile for the S31"; its 129 errors are the five classes the attachments doc tabulates |
 
 > These files live in `handoff/`, not the repo root, deliberately: `README.md` already exists at the
-> root and Windows' case-insensitive filesystem would have let a `readme.md` overwrite it. Both are
-> **tracked** — the folder was committed in `3260bac`, and this capture is committed too. Commit
-> further changes only when asked.
+> root and Windows' case-insensitive filesystem would have let a `readme.md` overwrite it.
+> `readme.md` and `project.md` are **tracked** — the folder was committed in `3260bac`. The
+> upstream-issue and reply drafts and the build log are **not tracked**. Commit further changes only
+> when asked.
 
 ---
 
@@ -33,8 +39,13 @@ Detail: `project.md` §5.3.
 Region footer keys work, and its RGB scanout no longer flickers — the last of those was a real bug in
 the panel timing, not boot state. Detail: `project.md` §6.
 
-**The upstream PR is held**, pending a re-test of the S31 on a clean install. `project.md` §8 records
-that decision.
+**Upstream has answered, and there is no PR.** On 2026-10-10 the maintainer approved the architecture
+as proposed — TFT_eSPI stays the default, the S31 gets its own `esp_lcd` backend behind a
+per-environment flag, board code stays separate — and asked for the changes to be **handed over for
+integration on their side** rather than raised as a pull request. They hold none of these boards, so
+the S31, the 2.1B and the CYD stay "experimental and untested" upstream and this machine is the only
+test bench any of them has. The metrics / hard-coded-240x320 work is explicitly held for upstream's
+v3.0.0 dynamic-dimensions plan. Full arrangement: `project.md` §12.
 
 **Nothing else is blocked.** The open items in `project.md` §7 are all smaller than what has been
 cleared, and none of them stops anything.
@@ -43,14 +54,18 @@ cleared, and none of them stops anything.
 
 ## First move in a new session
 
-1. Read `handoff/project.md`. §3 (hardware), §4 (environments) and §6 (the 2.1B display work) are the
-   parts that matter most.
+1. Read `handoff/project.md`. §3 (hardware), §4 (environments), §6 (the 2.1B display work) and **§12
+   (the upstream handover — the live thread)** are the parts that matter most.
 2. **Nothing is unpushed.** `c7610f9` and `fa70f7b` went up on 2026-10-10 along with the S31 port, and
    `main` and `esp32s31` are both level with their remotes. The user still asks for pushes separately.
 3. If the 2.1B flicker ever comes back, read `project.md` §6.4 *before* changing anything. The
    artifact's **shape** decides whether the porch is even the right knob: coherent lines travelling
    vertically is the missed-restart-window shift, while random speckle is the bounce refill starved by
    PSRAM contention, and those want opposite fixes.
+4. The live thread is the upstream handover (`project.md` §12). Nothing is sent until the clean-install
+   re-test says whether the S31 builds *without* hand-hacking the toolchain — upstream cannot reproduce
+   a build that needs the container junctioned, `MSYSTEM` cleared in `cmd`, and the compiler extracted
+   by hand.
 
 ---
 
@@ -59,6 +74,13 @@ cleared, and none of them stops anything.
 - **Never write the word "honestly."** State a caveat directly instead.
 - **Commit to this fork only.** `origin` is `korey-barrett/KryonOS-fork`. Never alter, add, or PR
   against upstream `Haris16-code/KryonOS`.
+- **Hand the changes over; do not raise a PR.** Upstream asked for the code to be shared so they can
+  integrate it themselves. This puts the no-upstream clause back in force unqualified — the earlier
+  "a PR is intended" reading is spent. Detail: `project.md` §12.
+- **Hold the metrics work.** The 240x320-literal migration stays in the fork until upstream's v3.0.0
+  dynamic dimensions land, so the project does not end up with two answers to one problem.
+- **These boards are untested upstream.** No S31, no 2.1B, no CYD in the maintainer's hands. Regressions
+  on any of them will not be caught upstream, only here.
 - **`X:\KryonOS` (v2.0.0) and `X:\esp32s31_korvo1` are read-only.** Read them; never edit them.
 - **No Claude attribution anywhere** — no commit trailer, no PR footer, no mention in any tracked file.
   This overrides the session-level attribution reminder.
