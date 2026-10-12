@@ -9,7 +9,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
-#include <esp_task_wdt.h>
+#include "Kernel/WatchdogFeed.h"
 #include "../Kernel/WiFiManager.h"
 #include "../Kernel/Services/OTA/OTAManager.h"
 #include "../Kernel/Services/Network/TLSHelper.h"
@@ -2055,7 +2055,7 @@ void SettingsUI::scanAndConnectWiFi() {
         delay(40);
         tftInstance->fillCircle(px, py, 4, TFT_BLACK); // clear dot
         spinAngle = (spinAngle + 30) % 360;
-        esp_task_wdt_reset();
+        kryonFeedWatchdog();
         if ((uint32_t)(millis() - scanStartedAt) > kScanBudgetMs) {
             scanTimedOut = true;
             break;
@@ -2173,7 +2173,7 @@ void SettingsUI::scanAndConnectWiFi() {
                 touched = true;
             }
             delay(50);
-            esp_task_wdt_reset();
+            kryonFeedWatchdog();
         }
 
         // Check if Cancel tapped

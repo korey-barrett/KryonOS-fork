@@ -1,7 +1,7 @@
 #include "HTTPServerEngine.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Kernel/WiFiManager.h"
-#include <esp_task_wdt.h>
+#include "Kernel/WatchdogFeed.h"
 
 WiFiServer* HTTPServerEngine::s_server = nullptr;
 uint16_t HTTPServerEngine::s_port = 80;
@@ -308,7 +308,7 @@ bool HTTPServerEngine::streamFile(WiFiClient& client, const String& filePath, co
         if (bytesRead > 0) {
             client.write(buffer, bytesRead);
         }
-        esp_task_wdt_reset(); // Feed Task Watchdog Timer
+        kryonFeedWatchdog(); // Feed Task Watchdog Timer
         vTaskDelay(1 / portTICK_PERIOD_MS); // Yield to keep UI and touch 60 FPS
     }
 

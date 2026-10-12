@@ -1,6 +1,6 @@
 #include "WebSocketClient.h"
 #include "../Kernel/Core/HarixKernel.h"
-#include <esp_task_wdt.h>
+#include "Kernel/WatchdogFeed.h"
 
 JSWebSocket::JSWebSocket(const String& rawUrl, const String& rawProtocol, const String& extraHeaders) 
     : url(rawUrl), protocol(rawProtocol), readyState(0), lastPing(0), userCloseCode(1000), userCloseReason("Normal closure"), initiatedClose(false) {
@@ -93,7 +93,7 @@ void JSWebSocket::close(uint16_t code, const String& reason) {
 
 void JSWebSocket::poll() {
     client.loop();
-    esp_task_wdt_reset();
+    kryonFeedWatchdog();
 }
 
 void JSWebSocket::onSocketEvent(WStype_t type, uint8_t * payload, size_t length) {

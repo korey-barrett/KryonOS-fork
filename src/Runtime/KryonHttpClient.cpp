@@ -5,7 +5,7 @@
 // WiFi.h must be explicit: on Arduino core 3.x, WiFiClientSecure.h no longer pulls it in.
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <esp_task_wdt.h>
+#include "Kernel/WatchdogFeed.h"
 
 HttpResponse KryonHttpClient::request(const String& method, const String& url, const String& body, 
                                     const std::map<String, String>& headers, uint32_t timeoutMs) {
@@ -62,7 +62,7 @@ HttpResponse KryonHttpClient::request(const String& method, const String& url, c
         httpCode = http.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length());
     }
 
-    esp_task_wdt_reset();
+    kryonFeedWatchdog();
     vTaskDelay(pdMS_TO_TICKS(1));
 
     if (httpCode > 0) {
@@ -168,7 +168,7 @@ bool KryonHttpClient::downloadFile(const String& url, const String& destPath,
         } else {
             vTaskDelay(pdMS_TO_TICKS(5));
         }
-        esp_task_wdt_reset();
+        kryonFeedWatchdog();
     }
 
     file.flush();

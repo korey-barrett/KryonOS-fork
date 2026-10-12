@@ -21,7 +21,7 @@
 #include <SPI.h>
 #include <math.h>
 #include <esp_random.h>
-#include <esp_task_wdt.h>
+#include "Kernel/WatchdogFeed.h"
 #include <map>
 #include <vector>
 
@@ -1818,7 +1818,7 @@ void JSBindings::showWiFiAlertModal() {
             }
         }
         delay(20);
-        esp_task_wdt_reset();
+        kryonFeedWatchdog();
     }
 }
 
@@ -2604,7 +2604,7 @@ static bool promptStoragePermission(const String& pkg, const String& targetPath)
         if (TouchDriver::getTouch(&tx, &ty)) {
             for (int i = 0; i < 3; i++) {
                 if (!btn[i].contains((int16_t)tx, (int16_t)ty)) continue;
-                while (TouchDriver::getTouch(&tx, &ty)) { delay(10); esp_task_wdt_reset(); }
+                while (TouchDriver::getTouch(&tx, &ty)) { delay(10); kryonFeedWatchdog(); }
                 if (i == 2) return false;               // Deny
                 grantSessionStorage(pkg);
                 if (i == 1) persistStoragePermission(pkg); // Always Allow: also persist
@@ -2612,7 +2612,7 @@ static bool promptStoragePermission(const String& pkg, const String& targetPath)
             }
         }
         delay(20);
-        esp_task_wdt_reset();
+        kryonFeedWatchdog();
     }
 }
 

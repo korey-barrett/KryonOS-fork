@@ -5,7 +5,7 @@
 #include "../Hal/Crypto/CryptoEngine.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <esp_task_wdt.h>
+#include "Kernel/WatchdogFeed.h"
 #include <algorithm>
 
 std::vector<SavedNetwork> WiFiManager::savedNetworks;
@@ -221,7 +221,7 @@ bool WiFiManager::connectTo(const String& ssid, const String& password, uint32_t
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeoutMs) {
         vTaskDelay(pdMS_TO_TICKS(200));
-        esp_task_wdt_reset();
+        kryonFeedWatchdog();
     }
 
     if (WiFi.status() == WL_CONNECTED) {
