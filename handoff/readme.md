@@ -64,9 +64,10 @@ cleared, and none of them stops anything.
 1. Read `handoff/project.md`. §3 (hardware), §4 (environments), §6 (the 2.1B display work), **§12 (the
    upstream handover — the live thread)** and §13 (the clean-install measurement) are the parts that
    matter most.
-2. **`main` is ahead of `origin/main`.** `c7610f9` and `fa70f7b` went up on 2026-10-10 with the S31 port,
-   but the S31 watchdog fix, the doc reconciliation and the brief corrections since are local only. The
-   user still asks for pushes separately.
+2. **Everything is pushed.** As of 2026-10-12 `main` is level with `origin/main`, carrying the S31
+   watchdog fix, the doc reconciliation and the brief corrections on top of the 2026-10-10 port. All four
+   branches — `main`, `esp32`, `esp32s3`, `esp32s31` — are level with their remotes. The user still asks
+   for pushes separately.
 3. If the 2.1B flicker ever comes back, read `project.md` §6.4 *before* changing anything. The
    artifact's **shape** decides whether the porch is even the right knob: coherent lines travelling
    vertically is the missed-restart-window shift, while random speckle is the bounce refill starved by
