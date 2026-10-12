@@ -609,20 +609,45 @@ added a global `NetworkClient` class (the base of `WiFiClientSecure`), and with 
 path the project header shadowed the framework's, producing a redefinition error. Do not reintroduce
 a file or class named `NetworkClient`.
 
-### 5.1 Installing the RISC-V toolchain by hand
+### 5.1 The RISC-V toolchain, and the one thing that breaks a clean install
 
-`esp32s31-default` will fail with `'riscv32-esp-elf-g++' is not recognized` on a machine that has
-never built it, **even though the platform, framework and libs all resolve correctly**. The pioarduino
-registry publishes ~1.6 KB *manifests* (`package.json` + `tools.json` + `.piopm`) rather than payloads,
-and PlatformIO's stage-2 per-OS archive download does not run for `toolchain-riscv32-esp` — so
-`~/.platformio/packages/toolchain-riscv32-esp/` ends up 13 KB with no `bin/`.
+A machine that has never built `esp32s31-default` can fail with `'riscv32-esp-elf-g++' is not
+recognized`, **even though the platform, framework and libs all resolve correctly** — and even though
+PlatformIO reports `toolchain-riscv32-esp@15.2.0+20251204 has been installed!`. What it installed was the
+pioarduino registry's ~1.6 KB *manifests* (`package.json` + `tools.json` + `.piopm`), which carry no
+payload, so `~/.platformio/packages/toolchain-riscv32-esp/` is left with no `bin/`.
 
-To fix it, download `riscv32-esp-elf-15.2.0_20251204-x86_64-w64-mingw32.zip` (963,974,138 bytes,
-sha256 `c61488aa15f49146aae918267110f775a52c3cef3844cbf261f475ef97523c3d`) and extract it into that
-package directory **with the single container directory `riscv32-esp-elf/` stripped**, so `bin/` lands
-at the package root (this mirrors the manifest's `strip_container_dirs: 1`). Confirm with
-`riscv32-esp-elf-g++.exe --version` → `crosstool-NG esp-15.2.0_20251204`. `pio pkg install -g -p <url>`
-is **not** the fix — `-p` means *platform*, and it fails with `MissingPackageManifestError`.
+**The cause is `MSYSTEM`, not the registry.** Measured 2026-10-12 against an empty core directory. A
+fresh core resolves this toolchain twice: PlatformIO installs the registry packages, *and*
+`idf_tools.py` stages the real toolchain under `<core>/tools/`, from which PlatformIO installs it over
+the top via a `file://` source. That second install is what supplies the compiler. `idf_tools.py`
+refuses to run at all when `MSYSTEM` is set — as Git Bash sets it — leaving only the manifests:
+
+```
+ERROR: MSys/Mingw is not supported. Please follow the getting started guide of the documentation to set
+up a supported environment
+```
+
+With `MSYSTEM` clear the same command needs no help: PlatformIO fetched
+`riscv32-esp-elf-15.2.0_20251204-x86_64-w64-mingw32.zip` (963,974,138 bytes, sha256
+`c61488aa15f49146aae918267110f775a52c3cef3844cbf261f475ef97523c3d`) by itself, and the build completed.
+
+So the fix is to make sure `MSYSTEM` is not set — run from a plain PowerShell or cmd prompt, or clear it
+properly. **Mind the idiom:** `set MSYSTEM= && ...` does *not* clear it. cmd captures the space before
+the `&&`, leaving `MSYSTEM` as a single space, which is still truthy and still enough to break the
+install. Use `set "MSYSTEM="`, or a shell that never set it in the first place.
+
+**If `idf_tools.py` cannot be made to run**, the manual route is to download the archive named above and
+extract it into `~/.platformio/packages/toolchain-riscv32-esp/` with the single container directory
+`riscv32-esp-elf/` stripped, so `bin/` lands at the package root (this mirrors the manifest's
+`strip_container_dirs: 1`). Confirm with `riscv32-esp-elf-g++.exe --version` →
+`crosstool-NG esp-15.2.0_20251204`. `pio pkg install -g -p <url>` is **not** a fix — `-p` means
+*platform*, and it fails with `MissingPackageManifestError`.
+
+An earlier version of this section presented the manual extraction as the routine fix, and stated that
+PlatformIO's stage-2 per-OS archive download "does not run" for this package. That did not hold in the
+measurement above, where the download ran unprompted. The manual route is a fallback for a shell that
+cannot run `idf_tools.py`, not the standard path.
 
 ### 5.2 TFT_eSPI does not support the ESP32-S31
 

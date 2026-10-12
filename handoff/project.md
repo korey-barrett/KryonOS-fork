@@ -136,14 +136,20 @@ in `platformio.ini`; `UiLayout` and `Display` are the runtime source of truth.
 
 - **The S31 and the 3.x core evict each other** from the PlatformIO package cache. Use a separate
   `PLATFORMIO_CORE_DIR` if switching between them often.
-- **The RISC-V toolchain arrives with the container directory UN-STRIPPED.** `idf_tools` extracts it as
-  `toolchain-riscv32-esp/riscv32-esp-elf/bin/`, but PlatformIO looks for `bin/` at the package root, so
-  the compiler exists and is invisible — the build dies with `'riscv32-esp-elf-g++' is not recognized`
-  after a 1.1 GB download. Junctioning each payload directory up to the package root fixes it without
-  re-downloading (the container's own `riscv32-esp-elf` subdirectory is the GCC sysroot and must become
-  a link named `riscv32-esp-elf` at the root, not be left as the container). See §11.
-- **The RISC-V toolchain installs by hand** — PlatformIO leaves a 1.6 KB manifest where the compiler
-  should be; extract the 964 MB zip yourself.
+- **`MSYSTEM`, not the toolchain, is what breaks a clean install** — and it is the whole of the
+  obstacle. With `MSYSTEM` set (which Git Bash does), `idf_tools.py` refuses to run, nothing stages the
+  toolchain, and PlatformIO installs only the ~1.6 KB registry manifests: `toolchain-riscv32-esp` ends
+  up with no `bin/`, and the build dies with `'riscv32-esp-elf-g++' is not recognized`. With `MSYSTEM`
+  clear, the same command fetches the real 963,974,138-byte archive by itself. Measured 2026-10-12; §13.
+- **`set MSYSTEM=` on a line ending in ` && ` does not clear it.** cmd captures the space before the
+  `&&`, so the variable becomes `" "` — still truthy, and still enough to break the install. Use
+  `set "MSYSTEM="`, or run from PowerShell, which does not set `MSYSTEM` at all.
+- **The RISC-V toolchain does NOT have to be installed by hand.** An earlier capture said PlatformIO
+  leaves a 1.6 KB manifest where the compiler should be, so the 964 MB zip must be extracted manually.
+  The 2026-10-12 re-test did not reproduce that on a clean environment — the payload installs itself
+  (§13). If it ever does reproduce, the workaround is to junction each payload directory up to the
+  package root, with a link named `riscv32-esp-elf` at the root pointing at the container's own sysroot
+  subdirectory rather than leaving the container there.
 - **TFT_eSPI cannot target the S31.** The legacy backend produces 129 IDF-6.1 errors, all of them
   inside TFT_eSPI's own `Processors/` backend, and the run is reproducible on demand. An `esp_lcd`
   backend is the way. (An earlier run, built with this fork's own TFT_eSPI setup flags, reported 130
@@ -510,9 +516,9 @@ non-TFT_eSPI backend seam.
 
 **State.** `esp32s31-korvo1` builds with **PlatformIO / arduino-esp32 alone** — no IDF build system and
 no BSP — and runs on the board: the 800x480 panel and the GT1151 touch both verified on COM3.
-`firmware.bin` is 2,121,616 bytes, over a 6,553,600-byte app slot. (The attachments doc quotes
-2,121,882 bytes for this same environment; the two run 266 bytes apart and have not been reconciled, so
-treat neither as exact.) The linker reports 2,020,176 bytes
+`firmware.bin` is 2,121,616 bytes, over a 6,553,600-byte app slot. (It is not byte-reproducible: four
+builds have produced 2,121,616 / 2,121,882 / 2,122,208 / 2,122,224 bytes, so quote none of these as
+exact. §13.) The linker reports 2,020,176 bytes
 used — flash 30.8% — and RAM 28.6% of 327,680. The `.bin` is the larger figure because DROM's
 `.eh_frame` is not counted by the size tool but is in the image, which is the same discrepancy §5.2
 describes.
@@ -542,17 +548,20 @@ describes.
 - `build_src_filter` excludes `src/Hal/Display/fonts/` at `[env]` level — those `.c` files are fragments
   meant to be `#include`d, and PlatformIO sweeps every `.c` under `src/`.
 
-**Three environment facts that are NOT in the repo**, each of which cost real time:
+**Two environment facts that are NOT in the repo**, each of which cost real time:
 
 1. **PlatformIO Core 6.2.0**, in `C:\Users\korey\.platformio\penv` — matching what upstream's unpinned CI
    resolves to and what this repo's own generated `.vscode/c_cpp_properties.json` recorded
    (`PLATFORMIO=60200`).
-2. **The toolchain package must have its container directory stripped** — §4's traps.
-3. **`MSYSTEM` has to be cleared for anything PlatformIO runs through `idf_tools.py`**, which refuses
-   MSys/Mingw outright. `unset MSYSTEM` in bash does **not** work here: the harness re-injects it into
-   every child, so even `python -c "os.environ"` sees it. `set MSYSTEM=` *inside cmd* is the only thing
-   that does. That is why the first esptool install failed — and why a "frozen" build window was really a
-   silent 1.1 GB tool download, since `idf_tools --quiet` prints nothing at all.
+2. **`MSYSTEM` has to be clear of the environment for anything PlatformIO runs through `idf_tools.py`**,
+   which refuses MSys/Mingw outright. This is the whole of the clean-install obstacle — §13 measured it.
+   Mind the clearing idiom: `set MSYSTEM=` on a line ending in ` && ` sets it to a space rather than
+   clearing it. That is why the first esptool install failed — and why a "frozen" build window was really
+   a silent 1.1 GB tool download, since `idf_tools --quiet` prints nothing at all.
+
+*(A third fact stood here — that the RISC-V toolchain must be extracted by hand with its container
+directory stripped. The 2026-10-12 re-test did not reproduce it: with `MSYSTEM` clear, the payload
+installs itself. §13.)*
 
 **Five bugs found on the way, all fixed and pushed:**
 
@@ -617,13 +626,54 @@ render. So the model travels with the backend, and what is offered upstream is c
 v3.0.0 dimensions rather than a second model standing alongside theirs.
 
 **Coordination is over the KryonOS Discord**, upstream's stated preference over email for exchanging
-code and firmware. Joining it is the user's call and has not been done here. Keep a branch or PR on this
-fork alongside whatever goes over Discord: a chat does not leave a record of what was handed over, when,
-or at which commit.
+code and firmware. The user joined the server on 2026-10-12. Keep a branch or PR on this fork alongside
+whatever goes over Discord: a chat does not leave a record of what was handed over, when, or at which
+commit.
 
-**What this makes critical.** Upstream cannot reproduce a build that has to be hand-hacked, and §4's
-toolchain traps decide whether the handover is "here is the port" or "here is the port and a toolchain
-workaround": the RISC-V container arrives un-stripped and has to be junctioned, the install otherwise
-leaves a 1.6 KB manifest where the compiler should be, and `MSYSTEM` must be cleared inside `cmd`
-because a bash `unset` does not survive. The clean-install re-test answers this, and it is the gate on
-sending anything.
+**What this makes critical, and what the re-test found.** Upstream cannot reproduce a build that has to
+be hand-hacked, so the clean-install re-test was the gate on sending anything. It has now been run, and
+it passed: all three boards build from an empty core directory with no manual step, and the only real
+obstacle is `MSYSTEM`, which a plain Windows shell does not set. §13 carries the measurement, the
+mechanism, and the corrected picture of §4's toolchain traps.
+
+---
+
+## 13. The clean-install re-test — measured 2026-10-12
+
+*(§12 names this as the gate on sending anything. This is its result. Scratch core directories and the
+full logs are under `%TEMP%\cc-clean-core\` on this machine; they are not in the tree.)*
+
+Five builds across three boards, each in an empty `PLATFORMIO_CORE_DIR`:
+
+| # | Core dir | Env | `MSYSTEM` | Result |
+|---|---|---|---|---|
+| 1 | `s31` | `esp32s31-korvo1` | `" "` | **FAILED** 398.93 s — `'riscv32-esp-elf-g++' is not recognized` |
+| 2 | `s31` (reused) | `esp32s31-korvo1` | absent | **SUCCESS** 268.42 s |
+| 3 | `3x` (fresh) | `esp32-cyd-28` | absent | **SUCCESS** 443.91 s |
+| 4 | `3x` (same core) | `waveshare-s3-lcd21b` | absent | **SUCCESS** 81.42 s |
+| 5 | `pristine` (fresh) | `esp32s31-korvo1` | absent | **SUCCESS** 568.59 s |
+
+**All three boards build from a clean core with no manual step.** Run 5 is the one that counts: its
+directory had never been touched, so nothing could be inherited, and it fetched
+`riscv32-esp-elf-15.2.0_20251204-x86_64-w64-mingw32.zip` unprompted — **963,974,138 bytes, sha256
+`c61488aa15f49146aae918267110f775a52c3cef3844cbf261f475ef97523c3d`**. That is byte-identical to the archive
+`Documentation/Display_Touch_Architecture.md` §5.1 says must be downloaded by hand, right down to the
+checksum the doc publishes. Run 3 also retires §6.1 in practice: the CYD and the Waveshare built from
+nothing on the same tree, so the seam did not disturb the boards that already worked.
+
+**The mechanism.** A fresh core does both halves. PlatformIO installs the registry packages — which for
+the RISC-V toolchain are ~1.6 KB manifests carrying no payload — *and* `idf_tools.py` stages the real
+toolchain under `<core>/tools/`, from which PlatformIO then installs it over the top via a `file://`
+source. The `file://` install is what supplies the compiler; the registry manifest alone leaves `bin/`
+empty. `MSYSTEM` is the switch that decides whether the second half happens at all. Run 1 failed solely
+because of it, and only because a `set MSYSTEM= && …` idiom set the variable to a space instead of
+clearing it — a space is truthy, and that is enough.
+
+**So §4's and §11's toolchain traps reduce to one.** The manual 964 MB download and container-strip was
+not needed on a clean environment here, and §5.1's stated premise — that PlatformIO's stage-2 per-OS
+archive download "does not run" for `toolchain-riscv32-esp` — did not hold. That recipe should be
+re-verified before it is forwarded upstream or followed by anyone else; as written it sends a reader
+down a path they do not need.
+
+**The S31 image is not byte-reproducible.** `firmware.bin` has come out at 2,121,616 / 2,121,882 /
+2,122,208 / 2,122,224 bytes across four builds. Quote none of those as exact.

@@ -21,7 +21,7 @@ re-deriving it.
 
 ---
 
-## Where things stand — 2026-10-10
+## Where things stand — 2026-10-12
 
 **The ESP32-S31-Korvo-1 port is done and verified on hardware.** The board builds and runs under
 **PlatformIO / arduino-esp32 alone** — no IDF build system and no BSP — with the 800x480 panel and the
@@ -48,6 +48,12 @@ test bench any of them has. The layout model turned out to be inseparable from t
 `KorvoRgbDisplay` calls `uiScale()` out of it — so it ships with the handover, and what is offered
 upstream instead is convergence on their v3.0.0 dimensions. Full arrangement: `project.md` §12.
 
+**The clean install passes.** The gate `project.md` §12 set — whether the S31 builds on a machine with
+no accumulated history behind it — has been run. Five builds across the S31, the CYD and the Waveshare,
+each in an empty core directory, all succeeded with no manual step. The 964 MB hand-extracted toolchain
+that `Documentation/Display_Touch_Architecture.md` §5.1 prescribes turned out to be unnecessary; the
+real obstacle is `MSYSTEM`, which a plain Windows shell does not set. Detail: `project.md` §13.
+
 **Nothing else is blocked.** The open items in `project.md` §7 are all smaller than what has been
 cleared, and none of them stops anything.
 
@@ -55,18 +61,19 @@ cleared, and none of them stops anything.
 
 ## First move in a new session
 
-1. Read `handoff/project.md`. §3 (hardware), §4 (environments), §6 (the 2.1B display work) and **§12
-   (the upstream handover — the live thread)** are the parts that matter most.
-2. **Nothing is unpushed.** `c7610f9` and `fa70f7b` went up on 2026-10-10 along with the S31 port, and
-   `main` and `esp32s31` are both level with their remotes. The user still asks for pushes separately.
+1. Read `handoff/project.md`. §3 (hardware), §4 (environments), §6 (the 2.1B display work), **§12 (the
+   upstream handover — the live thread)** and §13 (the clean-install measurement) are the parts that
+   matter most.
+2. **`main` is ahead of `origin/main`.** `c7610f9` and `fa70f7b` went up on 2026-10-10 with the S31 port,
+   but the S31 watchdog fix, the doc reconciliation and the brief corrections since are local only. The
+   user still asks for pushes separately.
 3. If the 2.1B flicker ever comes back, read `project.md` §6.4 *before* changing anything. The
    artifact's **shape** decides whether the porch is even the right knob: coherent lines travelling
    vertically is the missed-restart-window shift, while random speckle is the bounce refill starved by
    PSRAM contention, and those want opposite fixes.
-4. The live thread is the upstream handover (`project.md` §12). Nothing is sent until the clean-install
-   re-test says whether the S31 builds *without* hand-hacking the toolchain — upstream cannot reproduce
-   a build that needs the container junctioned, `MSYSTEM` cleared in `cmd`, and the compiler extracted
-   by hand.
+4. The live thread is the upstream handover (`project.md` §12). Its clean-install gate has been run and
+   passed (`project.md` §13), so what remains is sending the patch, not proving the build. Note the
+   letter still carries the old build story and needs rewording to match §13.
 
 ---
 
