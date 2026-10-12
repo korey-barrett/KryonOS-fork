@@ -44,8 +44,9 @@ as proposed — TFT_eSPI stays the default, the S31 gets its own `esp_lcd` backe
 per-environment flag, board code stays separate — and asked for the changes to be **handed over for
 integration on their side** rather than raised as a pull request. They hold none of these boards, so
 the S31, the 2.1B and the CYD stay "experimental and untested" upstream and this machine is the only
-test bench any of them has. The metrics / hard-coded-240x320 work is explicitly held for upstream's
-v3.0.0 dynamic-dimensions plan. Full arrangement: `project.md` §12.
+test bench any of them has. The layout model turned out to be inseparable from the backend —
+`KorvoRgbDisplay` calls `uiScale()` out of it — so it ships with the handover, and what is offered
+upstream instead is convergence on their v3.0.0 dimensions. Full arrangement: `project.md` §12.
 
 **Nothing else is blocked.** The open items in `project.md` §7 are all smaller than what has been
 cleared, and none of them stops anything.
@@ -77,8 +78,10 @@ cleared, and none of them stops anything.
 - **Hand the changes over; do not raise a PR.** Upstream asked for the code to be shared so they can
   integrate it themselves. This puts the no-upstream clause back in force unqualified — the earlier
   "a PR is intended" reading is spent. Detail: `project.md` §12.
-- **Hold the metrics work.** The 240x320-literal migration stays in the fork until upstream's v3.0.0
-  dynamic dimensions land, so the project does not end up with two answers to one problem.
+- **The layout model ships with the handover; it does not separate from it.** `KorvoRgbDisplay` calls
+  `uiScale()`, and `src/UI/UiLayout.*` is new code the fork created rather than a migration over
+  upstream's — so it travels with the backend, and the promise made to upstream is convergence on their
+  v3.0.0 dimensions, not a second model left standing. Detail: `project.md` §12.
 - **These boards are untested upstream.** No S31, no 2.1B, no CYD in the maintainer's hands. Regressions
   on any of them will not be caught upstream, only here.
 - **`X:\KryonOS` (v2.0.0) and `X:\esp32s31_korvo1` are read-only.** Read them; never edit them.

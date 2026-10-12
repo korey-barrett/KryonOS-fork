@@ -607,9 +607,14 @@ hand back updated code or a compiled binary to be tested here. Nothing is raised
 consequence to carry: this machine is the only test bench any of them has, and a regression in the
 handed-over code will not be caught upstream.
 
-**The metrics work is held.** The `System.screenWidth()`/`screenHeight()` migration and the hard-coded
-240x320 literals are to be coordinated with upstream's v3.0.0 dynamic-dimensions plan, so the project
-does not end up with two answers to one problem. §6.1's work stays in the fork until that is settled.
+**The metrics work cannot be held back, and the handover says so.** The intent was to keep it in the
+fork and coordinate it with upstream's v3.0.0 dynamic dimensions, but that separation does not exist.
+`src/Hal/Display/KorvoRgbDisplay.cpp:27` includes `UI/UiLayout.h` and line 192 calls `uiScale()`, and
+`src/UI/` did not exist at the base — `3fd1e74` created it, at the head of the port chain. The
+`present()` wiring the RGB backends need is likewise in `src/Kernel/Core/HarixKernel.cpp`, not the
+display layer. Scoping the patch to the display layer alone therefore yields something that cannot
+render. So the model travels with the backend, and what is offered upstream is convergence on their
+v3.0.0 dimensions rather than a second model standing alongside theirs.
 
 **Coordination is over the KryonOS Discord**, upstream's stated preference over email for exchanging
 code and firmware. Joining it is the user's call and has not been done here. Keep a branch or PR on this
