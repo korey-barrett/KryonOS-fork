@@ -33,4 +33,10 @@ idf/build*/
 idf/*.log
 idf/sdkconfig
 idf/sdkconfig.old
+idf/*.bak
 idf/managed_components/
+
+# Generated handover artifacts — a patch series exported for upstream to integrate (see
+# handoff/project.md §12). Output, not content: regenerate rather than commit.
+/kryonos-*.patch
+/kryonos-*.diff
