@@ -10,7 +10,8 @@ re-deriving it.
 | `upstream-issue-draft.md` | the message that put the display seam up for discussion before writing any PR. Upstream's 2026-10-10 reply answers it point by point; its own header still reads "not sent", which is stale. Outcome: `project.md` §12 |
 | `upstream-issue-message.txt` | the same message as plain text, without the markdown tables |
 | `upstream-issue-attachments.md` | the evidence pack that went with it — the `KryonDisplay` seam in full, the TFT_eSPI reproduction recipe, and the build and boot captures |
-| `upstream-reply-draft.md` | the reply to the maintainer's 2026-10-10 answer — agrees the handover, raises the clean-build question, and sizes the change set. Draft only, not sent |
+| `upstream-reply-draft.md` | the reply to the maintainer's 2026-10-10 answer — agrees the handover, reports the clean-install result, sizes the change set, and puts three points up for convergence. Draft only, not sent |
+| `upstream-reply-message.txt` | the same reply with the Markdown stripped, for pasting into an email |
 | `tft-espi-2.5.43-esp32s31-build-errors.log` | the verbatim 2,131-line log behind "TFT_eSPI cannot compile for the S31"; its 129 errors are the five classes the attachments doc tabulates |
 
 > These files live in `handoff/`, not the repo root, deliberately: `README.md` already exists at the
