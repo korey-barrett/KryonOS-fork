@@ -1,10 +1,11 @@
 # KryonOS-fork — project snapshot
 
-State captured 2026-10-07, updated through 2026-10-10. Written as a cold-start brief for a new chat
+State captured 2026-10-07, updated through 2026-10-13. Written as a cold-start brief for a new chat
 session.
 
 Supersedes the 2026-10-03 capture, whose §6 blocker (the CYD OTA failure) is now closed — see §5.3.
-The upstream handover recorded in §12 is this file's 2026-10-10 addition.
+The upstream handover recorded in §12 is this file's 2026-10-10 addition; the maintainer's answer to
+the reply that followed it is §14, this file's 2026-10-13 addition, and §14 is the live thread.
 
 ---
 
@@ -44,7 +45,7 @@ delicate part of the codebase — see §6.
 | Read-only reference | `X:\esp32s31_korvo1` — the Korvo-1 reference project |
 | Current branch | `main` |
 | Version | `KRYONOS_VERSION` = **2.0.2** (`platformio.ini:57`) |
-| Unpushed | the local commits carrying §7.3's watchdog fix and the documentation reconciliation. Pushes are asked for separately |
+| Unpushed | the local commits carrying §7's `task_wdt` watchdog fix and the documentation reconciliation. Pushes are asked for separately |
 
 `main` was force-pushed to `b79a700` on 2026-10-03 to strip Claude attribution, and there is none on
 the remote of the kind that rule is about — no trailer, no footer, no authorship claim in any tracked
@@ -371,39 +372,47 @@ can be traded away for margin.
 
 ## 7. Open items — none of them blocking
 
-1. **Push handling** — closed. `c7610f9` and `fa70f7b` were pushed on 2026-10-10, and `main` and
-   `esp32s31` are both level with their remotes. The user still asks for pushes separately.
-2. **`AppStoreUI::draw()` blocks the loop through a whole TLS handshake.**
+1. **`AppStoreUI::draw()` blocks the loop through a whole TLS handshake.**
    `AppStoreUI::draw()` calls `fetchCategories()` synchronously before it draws anything
    (`AppStoreUI.cpp:87-99`), with `http.setTimeout(15000)`. It is the one place in the UI that stalls
    the loop for seconds, and it is the worst PSRAM-contention offender on the board — the thing §6.4's
    fix works around rather than removes.
-3. **`task_wdt` spam while connecting — closed 2026-10-10.** `WiFiManager::connectTo()`'s wait
-   loop called `esp_task_wdt_reset()` from a task that was never subscribed (`WiFiManager.cpp:222-225`),
-   printing `task_wdt: esp_task_wdt_reset(707): task not found` every 200 ms until the association
-   completed — 38 lines in the Korvo-1 capture.
-
-   The cause is that a bare feed is only meaningful for a subscribed task, and whether the Arduino
-   loop task is subscribed is a property of the core: it is, under Arduino 3.3.12 / IDF 5.5.5 (every
-   environment but the S31), and it is not under Arduino 4.0.0-RC1 / IDF 6.1 (the S31). So the same
-   call was correct on five environments and an error stream on the sixth.
-
-   All ten call sites — `WiFiManager`, `HTTPServerEngine`, `JSBindings` (3), `KryonHttpClient` (2),
-   `WebSocketClient`, `SettingsUI` (2) — now go through `kryonFeedWatchdog()`
-   (`src/Kernel/WatchdogFeed.h`), which feeds only when `esp_task_wdt_status(nullptr) == ESP_OK`. The
-   query is per call rather than cached, because a subscription belongs to a task and the callers here
-   are not all the same task.
-
-   Confirmed by flashing the S31 and re-reading its boot log: **38 `task_wdt` lines before, 0 after**,
-   with the boot otherwise unchanged — panel and GT1151 up, SD mounted, WiFi associated on the first
-   candidate, KryonCloud still paired. All three flashed boards were rebuilt first
-   (`esp32s31-korvo1`, `esp32-cyd-28`, `waveshare-s3-lcd21b`) and all three are SUCCESS.
-4. **`.github/workflows/release.yml` publishes 3 of the 4 flash files** while `README.md:315` says
-   four.
-5. **The CYD OTA fix is confirmed by one A/B.** The per-variant manifests still carry the "remove the
+2. **The CYD OTA fix is confirmed by one A/B.** The per-variant manifests still carry the "remove the
    SD card" notice until it is confirmed more widely.
-6. **The `Graphic Demo` app draws off-canvas at `y = 300`.** It lives in `Haris16-code/KryonOS-AppStore`
+3. **The `Graphic Demo` app draws off-canvas at `y = 300`.** It lives in `Haris16-code/KryonOS-AppStore`
    — a third-party repo. The user has not asked for it to be reported.
+
+### Closed since
+
+- **Push handling — closed 2026-10-10.** `c7610f9` and `fa70f7b` were pushed, and `main` and
+  `esp32s31` are both level with their remotes. The user still asks for pushes separately.
+- **`task_wdt` spam while connecting — closed 2026-10-10.** `WiFiManager::connectTo()`'s wait loop
+  called `esp_task_wdt_reset()` from a task that was never subscribed (`WiFiManager.cpp:222-225`),
+  printing `task_wdt: esp_task_wdt_reset(707): task not found` every 200 ms until the association
+  completed — 38 lines in the Korvo-1 capture.
+
+  The cause is that a bare feed is only meaningful for a subscribed task, and whether the Arduino
+  loop task is subscribed is a property of the core: it is, under Arduino 3.3.12 / IDF 5.5.5 (every
+  environment but the S31), and it is not under Arduino 4.0.0-RC1 / IDF 6.1 (the S31). So the same
+  call was correct on five environments and an error stream on the sixth.
+
+  All ten call sites — `WiFiManager`, `HTTPServerEngine`, `JSBindings` (3), `KryonHttpClient` (2),
+  `WebSocketClient`, `SettingsUI` (2) — now go through `kryonFeedWatchdog()`
+  (`src/Kernel/WatchdogFeed.h`), which feeds only when `esp_task_wdt_status(nullptr) == ESP_OK`. The
+  query is per call rather than cached, because a subscription belongs to a task and the callers here
+  are not all the same task.
+
+  Confirmed by flashing the S31 and re-reading its boot log: **38 `task_wdt` lines before, 0 after**,
+  with the boot otherwise unchanged — panel and GT1151 up, SD mounted, WiFi associated on the first
+  candidate, KryonCloud still paired. All three flashed boards were rebuilt first
+  (`esp32s31-korvo1`, `esp32-cyd-28`, `waveshare-s3-lcd21b`) and all three are SUCCESS.
+- **The flash-file count — closed 2026-10-10.** `README.md`'s esptool command wrote a fourth image,
+  `boot_app0.bin` at `0xe000`, while `.github/workflows/release.yml` published three files. `9f333de`
+  dropped that line, and the README now says **three** (`README.md:331-335`) — which is what the
+  workflow does: it copies `firmware.bin`, `partitions.bin` and `bootloader.bin` into `release_files/`
+  and publishes `release_files/*.bin` (`release.yml:143-145,205`). The note beside the count explains
+  the absent `boot_app0.bin`: it belongs to the Arduino core rather than to a KryonOS build, and the
+  bootloader boots `ota_0` when `otadata` is blank.
 
 ---
 
@@ -636,6 +645,11 @@ it passed: all three boards build from an empty core directory with no manual st
 obstacle is `MSYSTEM`, which a plain Windows shell does not set. §13 carries the measurement, the
 mechanism, and the corrected picture of §4's toolchain traps.
 
+**The thread does not end here.** The reply built on this answer was sent with the exported patch
+after 2026-10-12, and the maintainer answered again — **§14**, which records that the patch is in and
+the code queued, and settles the three convergence points the reply raised. Read §14 with §12: §12 is
+the arrangement, §14 is what came of it.
+
 ---
 
 ## 13. The clean-install re-test — measured 2026-10-12
@@ -677,3 +691,74 @@ down a path they do not need.
 
 **The S31 image is not byte-reproducible.** `firmware.bin` has come out at 2,121,616 / 2,121,882 /
 2,122,208 / 2,122,224 bytes across four builds. Quote none of those as exact.
+
+---
+
+## 14. Upstream's answer to the reply — the convergence settled
+
+*(Captured 2026-10-13; the message itself carries no date, so that is when it was folded in. It
+answers `handoff/upstream-reply-draft.md`, which went out with the exported patch after 2026-10-12
+19:26 — §12's "what remains is sending the patch, not proving the build" is closed here. All three
+points that reply put up for convergence are settled below.)*
+
+**The patch arrived, and the code is queued.** The maintainer has the patch file and will "add your
+code in the next update". That update runs longer than usual because a sponsor has sent them a
+**LILYGO T-Deck Plus**: once it lands they will add official support for it and take it to a fully
+supported default stable board **in v3.0.0**. A **web flasher** is also coming — connect a board,
+choose the device, flash from the browser — a second first-flash path to weigh against the CYD's
+USB-only two-slot constraint (§3).
+
+**Point 1 — what `System.screenWidth()` answers — is settled the reply's way.** Logical and physical
+dimensions are separated explicitly: `System.screenWidth()`/`screenHeight()` give the **logical
+drawing size**, `System.displayWidth()`/`displayHeight()` the **physical panel**, and a
+`System.screenScale()` may follow if apps turn out to need the factor. The reason given is
+compatibility — existing apps already target 240x320, so drawing in logical coordinates is what stops
+a high-resolution panel from breaking their layouts, and scaling is the OS's job rather than the
+app's.
+
+- **Half of it is already in the tree.** `screenWidth()`/`screenHeight()`
+  (`src/Runtime/JSBindings.cpp:1494-1502`) return the canvas, because `Display::width()` is `w_`, the
+  drawing surface — so the name the maintainer wants bound to the logical size is the one already
+  bound to it. **`displayWidth()`/`displayHeight()` do not exist.** The only physical size in the
+  tree is `BOARD_PANEL_W/H` (480x480) in `src/Hal/Boards/waveshare-s3-lcd21b/BoardConfig.h:29-30`,
+  and that board is the only one that declares it.
+- `System.screenScale()` is speculative on their side, not a commitment.
+
+**Point 2 — which mechanism enlarges the UI — is the point the fork has to move on.** The ruling:
+one **centralized UI scaling system over logical coordinates**, with display positioning and
+clipping handled separately, and integer scaling and aperture blitting **not** both acting as ways to
+enlarge the whole UI. Mapped per board: the CYD (240x320) keeps 1x, the Waveshare 2.1B gets a layout
+designed for the round screen with suitable scaling and clipping, and the Korvo-1 (800x480) gets a
+widescreen layout and an appropriate scale factor. Aperture blitting is **kept**, demoted to a
+display-specific operation handling the round panel's visible area. Integer scaling is conceded not
+to fit every shape, with 800x480 named directly.
+
+- **The 2.1B's current enlargement is the overlap being ruled out.** Its logical canvas is shrunk to
+  **201x268** so the integer scale stays 1, and the 1.2x growth happens in the aperture
+  (`platformio.ini:269-270`; §6.1). The reply predicted exactly this reading — "if your dimensions
+  are it, the aperture should go back to being about the round panel's geometry and nothing else" —
+  and the answer takes it.
+- **It also strains the premise the model rests on.** The maintainer's reason for logical
+  coordinates is that existing apps target 240x320; on a 201x268 canvas such an app gets neither the
+  size nor the aspect it assumes.
+- So the work left here is a re-based 2.1B: a layout for the round screen, one scaling mechanism, and
+  the aperture back to geometry. `uiScale()` (`src/UI/UiLayout.h:93`) is already the centralized
+  logical-coordinate scale the ruling asks for, and that is the part of the reply that survives
+  intact.
+
+**Point 3 — the regression harness — is accepted outright**, "a must": the layout model stays a pure
+function with a host-side mirror, and `compute(240, 320)` keeps reproducing the historical constants
+bit for bit, so either side can change the model without silently moving every existing board's
+pixels.
+
+**Also settled.** The **experimental** label goes on the S31 — agreed, since upstream still cannot
+test it. **Discord** is confirmed as where the rest of the integration happens, which is the move
+§12 already recorded.
+
+**Unchanged.** There is still no PR: the changes are handed over for upstream to integrate. Upstream
+still holds no S31, no 2.1B and no CYD, so this machine remains the only test bench any of them has
+(§12). The S31 image is still not byte-reproducible (§13).
+
+**One item is not technical.** The $5 sponsorship of 2026-10-02 cannot be paid out — LemonSqueezy
+enforces a $50 minimum — and the message invites $50 instead. It is the user's call, and nothing in
+the tree depends on it.

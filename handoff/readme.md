@@ -6,11 +6,11 @@ re-deriving it.
 | File | What it holds |
 |---|---|
 | `readme.md` | this file — orientation, current state, first move |
-| `project.md` | the full technical state: hardware, environments, what is done, what is broken, standing rules |
-| `upstream-issue-draft.md` | the message that put the display seam up for discussion before writing any PR. Upstream's 2026-10-10 reply answers it point by point; its own header still reads "not sent", which is stale. Outcome: `project.md` §12 |
+| `project.md` | the full technical state: hardware, environments, what is done, what is broken, standing rules. **§14 is the live thread** — the maintainer's answer to the reply |
+| `upstream-issue-draft.md` | the message that put the display seam up for discussion before writing any PR. Sent; upstream's 2026-10-10 reply answers it point by point. Outcome: `project.md` §12 |
 | `upstream-issue-message.txt` | the same message as plain text, without the markdown tables |
 | `upstream-issue-attachments.md` | the evidence pack that went with it — the `KryonDisplay` seam in full, the TFT_eSPI reproduction recipe, and the build and boot captures |
-| `upstream-reply-draft.md` | the reply to the maintainer's 2026-10-10 answer — agrees the handover, reports the clean-install result, sizes the change set, and puts three points up for convergence. Draft only, not sent |
+| `upstream-reply-draft.md` | the reply to the maintainer's 2026-10-10 answer — agrees the handover, reports the clean-install result, sizes the change set, and puts three points up for convergence. **Sent** with the patch after 2026-10-12; all three points are settled in `project.md` §14 |
 | `upstream-reply-message.txt` | the same reply with the Markdown stripped, for pasting into an email |
 | `tft-espi-2.5.43-esp32s31-build-errors.log` | the verbatim 2,131-line log behind "TFT_eSPI cannot compile for the S31"; its 129 errors are the five classes the attachments doc tabulates |
 
@@ -22,7 +22,16 @@ re-deriving it.
 
 ---
 
-## Where things stand — 2026-10-12
+## Where things stand — 2026-10-13
+
+**The patch is sent, and upstream has answered it.** The reply tabled above went out with the
+exported patch after 2026-10-12, and the maintainer has it: the code is queued for their next update,
+which runs long because a sponsor sent them a **LILYGO T-Deck Plus** to support in v3.0.0, with a
+browser **web flasher** also coming. All three convergence points the reply raised are settled —
+logical and physical dimensions get separate APIs, the regression harness is taken as a must, and
+the one thing that moves **here** rather than upstream is the UI scaling model: a single centralized
+scaling system over logical coordinates, with aperture blitting demoted to the round panel's
+geometry. Record: `project.md` §14.
 
 **The ESP32-S31-Korvo-1 port is done and verified on hardware.** The board builds and runs under
 **PlatformIO / arduino-esp32 alone** — no IDF build system and no BSP — with the 800x480 panel and the
@@ -47,7 +56,8 @@ integration on their side** rather than raised as a pull request. They hold none
 the S31, the 2.1B and the CYD stay "experimental and untested" upstream and this machine is the only
 test bench any of them has. The layout model turned out to be inseparable from the backend —
 `KorvoRgbDisplay` calls `uiScale()` out of it — so it ships with the handover, and what is offered
-upstream instead is convergence on their v3.0.0 dimensions. Full arrangement: `project.md` §12.
+upstream instead is convergence on their v3.0.0 dimensions. Full arrangement: `project.md` §12 — and
+what came of the reply it prompted, §14.
 
 **The clean install passes.** The gate `project.md` §12 set — whether the S31 builds on a machine with
 no accumulated history behind it — has been run. Five builds across the S31, the CYD and the Waveshare,
@@ -73,9 +83,10 @@ cleared, and none of them stops anything.
    artifact's **shape** decides whether the porch is even the right knob: coherent lines travelling
    vertically is the missed-restart-window shift, while random speckle is the bounce refill starved by
    PSRAM contention, and those want opposite fixes.
-4. The live thread is the upstream handover (`project.md` §12). Its clean-install gate has been run and
-   passed (`project.md` §13), so what remains is sending the patch, not proving the build. Note the
-   letter still carries the old build story and needs rewording to match §13.
+4. The live thread is the UI scaling convergence (`project.md` §14). The patch is sent, the
+   clean-install gate passed (§13), and the dimension API is settled; what is left is re-basing the
+   Waveshare 2.1B onto one scaling mechanism, because its 201x268 canvas exists only to keep the
+   integer scale at 1 while the aperture does the growth — the overlap upstream has now ruled out.
 
 ---
 
@@ -92,7 +103,8 @@ cleared, and none of them stops anything.
   upstream's — so it travels with the backend, and the promise made to upstream is convergence on their
   v3.0.0 dimensions, not a second model left standing. Detail: `project.md` §12.
 - **These boards are untested upstream.** No S31, no 2.1B, no CYD in the maintainer's hands. Regressions
-  on any of them will not be caught upstream, only here.
+  on any of them will not be caught upstream, only here. The **experimental** label on the S31 is now
+  agreed on upstream's side too — `project.md` §14.
 - **`X:\KryonOS` (v2.0.0) and `X:\esp32s31_korvo1` are read-only.** Read them; never edit them.
 - **No Claude attribution anywhere** — no commit trailer, no PR footer, no mention in any tracked file.
   This overrides the session-level attribution reminder.
